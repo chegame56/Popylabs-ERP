@@ -25,6 +25,7 @@ export default function ProductsPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 
@@ -58,11 +59,21 @@ export default function ProductsPage() {
           ...(d.data() as Omit<Product, "id">),
         }));
         setProducts(list);
+        setLoadError(null);
         setLoading(false);
       },
       (error) => {
         console.error("Products snapshot error:", error);
-        toast.error("Failed to load products. Check your connection or permissions.");
+        const code = error?.code || "";
+        const msg = (error?.message || "").toLowerCase();
+        let friendly = "Failed to load products. Check your connection or permissions.";
+        if (code === "failed-precondition" || msg.includes("index")) {
+          friendly = "Missing Firestore index. Deploy with: firebase deploy --only firestore:indexes (or use the link shown in the browser console).";
+        } else if (code === "permission-denied") {
+          friendly = "Permission denied. Deploy rules + indexes, then refresh (see docs/firebase-setup.md).";
+        }
+        setLoadError(friendly);
+        toast.error(friendly);
         setLoading(false);
       }
     );
@@ -208,7 +219,13 @@ export default function ProductsPage() {
         {loading && (
           <div className="p-8 text-center text-gray-500">Loading products...</div>
         )}
-        {!loading && filtered.length === 0 && (
+        {loadError && !loading && (
+          <div className="p-8 text-center">
+            <div className="text-red-600 font-medium mb-2">{loadError}</div>
+            <div className="text-xs text-gray-500">After fixing (deploy rules/indexes), use the Retry button in the org banner or refresh the page.</div>
+          </div>
+        )}
+        {!loading && !loadError && filtered.length === 0 && (
           <div className="p-8 text-center text-gray-500">
             {products.length === 0 ? "No products yet. Add your first one." : "No products match your search."}
           </div>

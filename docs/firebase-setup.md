@@ -51,6 +51,20 @@ You must be logged into the Firebase CLI with an account that has permission on 
 
 After changing `firestore.rules` locally, always re-run the deploy command above (or the equivalent in CI).
 
+You should also deploy indexes when the `firestore.indexes.json` changes (the queries for products sorted by name and transactions sorted by date require composite indexes):
+
+```bash
+firebase deploy --only firestore:indexes
+```
+
+Both commands can be combined:
+
+```bash
+firebase deploy --only firestore:rules,firestore:indexes
+```
+
+(Do this for the exact project whose config is in your Vercel environment variables / local .env.local.)
+
 **Never** rely on the temporary "test mode" rules for anything real. They expire and give overly broad access.
 
 The file `firebase.json` in the repo tells the Firebase CLI to use `firestore.rules` for this project.
@@ -153,6 +167,22 @@ This banner (with a recovery form) appears when:
 4. If you still see the banner, use the **"Quick recovery — create / link your organization"** form that appears directly under the banner. Enter your business legal name and click "Create my organization". This performs the same two writes the Register page does (allowed by the rules for the current signed-in UID as owner).
 
 After a successful recovery or a clean registration you should see your business name in the top bar and be able to use Products, Sales, etc.
+
+### "Failed to load products" / "Could not load your products" / history errors
+
+These toasts appear when the realtime `onSnapshot` queries fail.
+
+Common causes (now that you have an organization profile):
+
+- **Missing composite indexes** (very common on production Firestore after adding the multi-tenant queries): The queries do `where("organizationId", "==", yourOrg) + orderBy("name")` (products) or `orderBy("createdAt")` (transactions). These require indexes defined in `firestore.indexes.json`.
+  - Fix: `firebase deploy --only firestore:indexes`
+  - Or, temporarily, open the browser DevTools console — the exact error usually contains a long URL like `https://console.firebase.google.com/.../indexes?create_composite=...`. Click it (while logged into the right Google account) and it creates the index in ~1-5 minutes. Then hard refresh.
+
+- Permission denied on products/transactions: Your current user's `/users/{uid}` profile either doesn't exist, points to the wrong `organizationId`, or the rules were not deployed. Use the recovery form on any page (it appears under the red banner) or re-run the rules deploy.
+
+- Old data: Products or transactions created before you had a proper organization profile may have the wrong (or missing) `organizationId` field. They will not appear for the current org. Just add new ones via the Products page — new ones are written with the correct scope.
+
+After deploying rules + indexes, the Products list, Sale screen (product picker), Dashboard recent activity, and History should all populate from real Firestore data for your organization.
 
 ### Register vs direct Auth users
 

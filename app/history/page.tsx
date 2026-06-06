@@ -41,7 +41,15 @@ export default function HistoryPage() {
       },
       (err) => {
         console.error("History load error:", err);
-        toast.error("Failed to load transaction history");
+        const code = err?.code || "";
+        const msg = (err?.message || "").toLowerCase();
+        if (code === "failed-precondition" || msg.includes("index")) {
+          toast.error("Missing Firestore index. Deploy indexes: firebase deploy --only firestore:indexes");
+        } else if (code === "permission-denied") {
+          toast.error("Permission denied. Deploy Firestore rules.");
+        } else {
+          toast.error("Failed to load transaction history");
+        }
         setLoading(false);
       }
     );

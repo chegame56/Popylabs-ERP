@@ -62,7 +62,15 @@ function SaleContent() {
       },
       (err) => {
         console.error("Sale products load error:", err);
-        toast.error("Could not load your products");
+        const code = err?.code || "";
+        const msg = (err?.message || "").toLowerCase();
+        if (code === "failed-precondition" || msg.includes("index")) {
+          toast.error("Missing Firestore index. Deploy indexes: firebase deploy --only firestore:indexes");
+        } else if (code === "permission-denied") {
+          toast.error("Permission denied loading products. Deploy the rules.");
+        } else {
+          toast.error("Could not load your products");
+        }
         setProductsLoading(false);
       }
     );

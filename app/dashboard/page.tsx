@@ -39,24 +39,31 @@ export default function Dashboard() {
       limit(5)
     );
 
-    const unsubRecent = onSnapshot(recentQ, (snap) => {
-      const txns: Transaction[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
-      setRecent(txns);
+    const unsubRecent = onSnapshot(
+      recentQ,
+      (snap) => {
+        const txns: Transaction[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+        setRecent(txns);
 
-      // Very rough "today" calculation from the recent snapshot (good enough for v1 dashboard)
-      let total = 0;
-      let count = 0;
-      const startOfDay = today.getTime();
-      txns.forEach((t) => {
-        const ts = t.createdAt?.toDate?.().getTime?.() || 0;
-        if (ts >= startOfDay) {
-          total += t.total || 0;
-          count += 1;
-        }
-      });
-      setTodayTotal(total);
-      setTodayCount(count);
-    });
+        // Very rough "today" calculation from the recent snapshot (good enough for v1 dashboard)
+        let total = 0;
+        let count = 0;
+        const startOfDay = today.getTime();
+        txns.forEach((t) => {
+          const ts = t.createdAt?.toDate?.().getTime?.() || 0;
+          if (ts >= startOfDay) {
+            total += t.total || 0;
+            count += 1;
+          }
+        });
+        setTodayTotal(total);
+        setTodayCount(count);
+      },
+      (err) => {
+        console.error("Dashboard recent transactions error:", err);
+        // Non-fatal for dashboard; the list just stays empty
+      }
+    );
 
     // Low stock count (one-time query is fine here)
     const loadLowStock = async () => {
