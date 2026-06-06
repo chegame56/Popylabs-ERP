@@ -106,6 +106,10 @@ function SaleContent() {
 
     setCompleting(true);
 
+    // Capture a trimmed customer name at completion time (used for both the immutable txn record and the PDF).
+    // We trim here so a field of only whitespace is treated as "not provided".
+    const trimmedCustomer = (customerName || "").trim();
+
     try {
       // Use a Firestore transaction for atomicity:
       // - Read current org sequence
@@ -159,6 +163,9 @@ function SaleContent() {
 
         // 4. Create the transaction record
         const txnRef = doc(collection(db, "transactions")); // auto id
+
+        // Build txnData without any undefined values. Only include customerName (for orders) when it has a real trimmed value.
+        // Passing undefined (or a key with undefined) to Transaction.set() throws "Unsupported field value: undefined".
         const txnData = {
           organizationId: organization.id,
           type: mode,
@@ -173,10 +180,11 @@ function SaleContent() {
           discount,
           total,
           paymentMethod,
-          customerName: mode === "order" ? (customerName.trim() || undefined) : undefined,
           createdAt: serverTimestamp(),
           createdByUid: user.uid,
+          ...(mode === "order" && trimmedCustomer ? { customerName: trimmedCustomer } : {}),
         };
+
         transaction.set(txnRef, txnData);
 
         // 5. Advance the invoice sequence on the org
@@ -201,8 +209,8 @@ function SaleContent() {
       docPdf.text(`Date: ${new Date().toLocaleDateString()}`, 20, 50);
       docPdf.text(`Payment: ${paymentMethod}`, 20, 56);
 
-      if (mode === "order" && customerName) {
-        docPdf.text(`Customer: ${customerName}`, 20, 62);
+      if (mode === "order" && trimmedCustomer) {
+        docPdf.text(`Customer: ${trimmedCustomer}`, 20, 62);
       }
 
       // Items

@@ -16,6 +16,7 @@ import {
   deleteDoc,
   doc,
   serverTimestamp,
+  deleteField,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { toast } from "sonner";
@@ -26,6 +27,7 @@ export default function ProductsPage() {
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [listRetry, setListRetry] = useState(0);
   const [showAdd, setShowAdd] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 
@@ -79,7 +81,7 @@ export default function ProductsPage() {
     );
 
     return () => unsubscribe();
-  }, [organization]);
+  }, [organization, listRetry]);
 
   const filtered = products.filter((p) =>
     p.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -135,36 +137,59 @@ export default function ProductsPage() {
 
     try {
       if (editingProduct) {
-        // Update existing
+        // Update existing — use deleteField() for optional fields when cleared so we don't leave stale values
         const ref = doc(db, "products", editingProduct.id);
-        await updateDoc(ref, {
+        const updateData: Record<string, any> = {
           name: form.name.trim(),
           price,
           stock,
-          barcode: form.barcode.trim() || undefined,
-          imageUrl: form.imageUrl.trim() || undefined,
           updatedAt: serverTimestamp(),
-        });
+        };
+
+        const barcodeVal = form.barcode.trim();
+        if (barcodeVal) {
+          updateData.barcode = barcodeVal;
+        } else {
+          updateData.barcode = deleteField();
+        }
+
+        const imageVal = form.imageUrl.trim();
+        if (imageVal) {
+          updateData.imageUrl = imageVal;
+        } else {
+          updateData.imageUrl = deleteField();
+        }
+
+        await updateDoc(ref, updateData);
         toast.success("Product updated");
       } else {
-        // Create new
-        await addDoc(collection(db, "products"), {
+        // Create new — only include optional fields when they have a value (Firestore rejects undefined)
+        const productData: Record<string, any> = {
           organizationId: organization.id,
           name: form.name.trim(),
           price,
           stock,
-          barcode: form.barcode.trim() || undefined,
-          imageUrl: form.imageUrl.trim() || undefined,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
-        });
+        };
+
+        const barcodeVal = form.barcode.trim();
+        if (barcodeVal) productData.barcode = barcodeVal;
+
+        const imageVal = form.imageUrl.trim();
+        if (imageVal) productData.imageUrl = imageVal;
+
+        await addDoc(collection(db, "products"), productData);
         toast.success("Product added");
       }
       closeModal();
     } catch (err: any) {
       console.error("Save product error:", err);
+      const msg = (err?.message || "").toLowerCase();
       if (err?.code === "permission-denied") {
         toast.error("Permission denied. Make sure Firestore rules are deployed for production.");
+      } else if (msg.includes("undefined") || msg.includes("unsupported field value") || msg.includes("invalid data")) {
+        toast.error("Failed to save product: leave optional fields (Image URL, Barcode) completely empty if not using them.");
       } else {
         toast.error("Failed to save product");
       }
@@ -222,7 +247,16 @@ export default function ProductsPage() {
         {loadError && !loading && (
           <div className="p-8 text-center">
             <div className="text-red-600 font-medium mb-2">{loadError}</div>
-            <div className="text-xs text-gray-500">After fixing (deploy rules/indexes), use the Retry button in the org banner or refresh the page.</div>
+            <div className="text-xs text-gray-500 mb-3">
+              Adding/editing products may still work (writes don't need the sort index). 
+              The live list will update once the index is ready.
+            </div>
+            <button
+              onClick={() => setListRetry((r) => r + 1)}
+              className="px-4 py-1.5 text-sm rounded-lg border hover:bg-gray-50"
+            >
+              Retry loading products list
+            </button>
           </div>
         )}
         {!loading && !loadError && filtered.length === 0 && (
