@@ -25,56 +25,35 @@ This project uses **Firebase** for:
 
 > **No Storage needed** — you can skip the Storage setup completely.
 
-### 2.5 Set Firestore Security Rules (Fix for "Missing or insufficient permissions")
+### 2.5 Set Firestore Security Rules (Critical for production)
 
-This is the #1 reason you see:
+**The #1 cause of "Could not load your organization profile", permission errors, and blank pages after deploying to Vercel is that the strict multi-tenant rules from this repo have not been published to your Firebase project.**
 
-> FirebaseError: Missing or insufficient permissions.
+The app now uses **production-grade org-scoped rules** (see `firestore.rules` in the repo root). These rules:
 
-**Fastest fix right now (30 seconds):**
+- Allow a new user (during register) to create their own organization (they become the owner).
+- Allow a signed-in user to read/write **only** data belonging to the organization linked in their `/users/{uid}` profile document.
+- Make transactions immutable (no client-side edits/deletes).
+- Require every product and transaction to carry the correct `organizationId`.
 
-1. Open [Firebase Console](https://console.firebase.google.com/) → your project `popylabs-erp-dev`
-2. Go to **Firestore Database** → **Rules** tab
-3. Replace everything with this (permissive dev rules, no 30-day expiry):
-
-```js
-rules_version = '2';
-service cloud.firestore {
-  match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if request.auth != null;
-    }
-  }
-}
-```
-
-4. Click **Publish**.
-
-This lets any logged-in user read/write while you build on the dev project.
-
-**Proper way (recommended — rules live in git):**
-
-We have added `firestore.rules` + `firebase.json` to the project.
-
-Run these commands (one time):
+**How to deploy the rules (do this for every Firebase project you point the app at):**
 
 ```bash
+# One-time setup
 npm install -g firebase-tools
 firebase login
-firebase init firestore
-```
 
-**Important:** `firebase init firestore` will offer to overwrite `firestore.rules` and `firestore.indexes.json`. Accept, **then immediately redeploy** the dev rules we actually want (see the redeploy command below).
-
-After init (or any time you edit rules):
-
-```bash
+# From the project root (where firestore.rules lives)
 firebase deploy --only firestore:rules
 ```
 
-This pushes the local `firestore.rules` (the non-expiring dev version) to your Firestore project.
+You must be logged into the Firebase CLI with an account that has permission on the target project.
 
-Later (before real customers or going live) we will replace the broad "any authenticated user" rule with proper per-organization rules so that a user can only access their own organization's data.
+After changing `firestore.rules` locally, always re-run the deploy command above (or the equivalent in CI).
+
+**Never** rely on the temporary "test mode" rules for anything real. They expire and give overly broad access.
+
+The file `firebase.json` in the repo tells the Firebase CLI to use `firestore.rules` for this project.
 
 ## 3. Get Your Web App Configuration
 
@@ -146,37 +125,49 @@ This keeps everything free and fast during development.
 - **Product images**: Use public image URLs only. No Firebase Storage.
 - Do not put real customer data into a project until you have deployed the production Firestore rules from this repo.
 
-## 7. After Setup + Fixing Permissions Error
+## 7. After Setup + Fixing "Could not load your organization profile"
 
 ```bash
 npm run dev
 ```
 
-If you see `FirebaseError: Missing or insufficient permissions` in the console:
+### The error banner: "Could not load your organization profile. Check Firestore security rules..."
 
-1. Run this from your project folder:
+This banner (with a recovery form) appears when:
+
+- A signed-in Firebase Auth user exists, **but** the app cannot read a matching `/users/{your-uid}` document that points to a readable `/organizations/{id}` document.
+- Most common after a Vercel deploy: you set the Firebase env vars on Vercel but **never ran `firebase deploy --only firestore:rules`** against that same project.
+- The register flow only partially completed (organization created but the `users/{uid}` link doc was never written, or was deleted).
+- You created the Firebase Auth user directly in the console / another tool instead of going through the app's Register page.
+- Field name mismatch (the code and rules now consistently use `organizationId` on user/profile docs and `ownerUid` on the organization doc).
+
+**Fix steps (in order):**
+
+1. Make sure you are pointing at the correct Firebase project (check `.env.local` locally or the Vercel environment variables — `NEXT_PUBLIC_FIREBASE_PROJECT_ID` must match).
+2. From the repo root, run:
    ```bash
    firebase deploy --only firestore:rules
    ```
-2. Or, as a quick console fallback: Firebase Console → Firestore → **Rules** tab → paste the permissive rule from section 2.5 → **Publish**
-3. Hard refresh the browser (or restart `npm run dev`).
+   (This publishes the strict org-scoped rules in `firestore.rules`.)
+3. Hard refresh the browser (Ctrl+Shift+R or Cmd+Shift+R). If you just signed in, try signing out and signing back in.
+4. If you still see the banner, use the **"Quick recovery — create / link your organization"** form that appears directly under the banner. Enter your business legal name and click "Create my organization". This performs the same two writes the Register page does (allowed by the rules for the current signed-in UID as owner).
 
-After that you should be able to:
+After a successful recovery or a clean registration you should see your business name in the top bar and be able to use Products, Sales, etc.
 
-- Register a new business (Auth user + `organizations` + `users` docs created)
-- Log in (the auth context reads your profile + org)
-- See your real business name in the top bar
+### Register vs direct Auth users
 
-Next steps we will build:
-- Products stored in Firestore (with optional image URL)
-- Real sales that save to Firestore
-- Cross-device scanner using active carts + realtime
-- Proper IRD-compliant invoices using your organization data
+The only supported way to get a fully linked account today is the in-app **Register** page (or the recovery form in the banner). It creates:
+- `organizations/{randomId}` with `ownerUid = yourUid`
+- `users/{yourUid}` with `organizationId = the new org id`
+
+If you add users only via Firebase Authentication (no profile doc), they will hit the banner until they (or an owner) runs the recovery flow.
 
 ---
 
-**Your Firebase project is ready** (`popylabs-erp-dev`).
+**Production note for Vercel**
 
-After you successfully run `firebase deploy --only firestore:rules`, registration and login should work without permission errors, and your real business name will appear in the top bar.
+- Rules live in Firestore, not in your Next.js bundle. Changing `firestore.rules` and pushing to Vercel does **nothing** to Firebase. You must run the `firebase deploy --only firestore:rules` command (against the project whose keys are in Vercel env vars).
+- Strongly recommended: use separate Firebase projects for dev/staging vs production. Rotate any keys that were exposed while the app was running an unpatched Next.js version (see earlier CVE notes).
+- Set `NEXT_PUBLIC_USE_FIREBASE_EMULATORS=false` (or leave it unset) for all non-local environments.
 
-Just make sure `.env.local` has the correct values and restart the dev server if you changed it.
+After you run the rules deploy, registration/login should succeed and the organization profile (legal name, invoice prefix, low stock threshold, etc.) will load for every page.

@@ -42,11 +42,15 @@ service cloud.firestore {
       allow create: if isSignedIn() &&
         request.resource.data.ownerUid == request.auth.uid;
 
-      // Read / update only if this org belongs to the signed-in user's profile
-      // (or they are explicitly the ownerUid on the org doc)
+      // Owner of the org doc can always read/update it (this check does not require
+      // the users/{uid} pointer document to exist — useful for recovery flows).
       allow read, update: if isSignedIn() &&
-        (getUserOrganizationId() == orgId ||
-         resource.data.ownerUid == request.auth.uid);
+        resource.data.ownerUid == request.auth.uid;
+
+      // Also allow if the user's profile document points to this orgId.
+      // (This is the normal path after a successful registration.)
+      allow read, update: if isSignedIn() &&
+        getUserOrganizationId() == orgId;
     }
 
     // --- Products (stock, pricing, barcodes) ---

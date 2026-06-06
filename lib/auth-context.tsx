@@ -25,6 +25,11 @@ interface AuthContextType {
   loading: boolean;
   signOut: () => Promise<void>;
   refreshOrganization: () => Promise<void>;
+  /** Allows a signed-in user who has no profile/org yet (e.g. after a partial register or direct Auth create)
+   *  to bootstrap their organization. This is permitted by the current Firestore rules as long as they
+   *  set themselves as ownerUid.
+   */
+  initializeOrganization: (legalName: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -63,6 +68,56 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const initializeOrganization = async (legalName: string) => {
+    if (!user) {
+      throw new Error("You must be signed in to initialize an organization");
+    }
+    const trimmed = legalName.trim();
+    if (!trimmed) {
+      throw new Error("Business name is required");
+    }
+
+    try {
+      const orgId = crypto.randomUUID();
+      const invoicePrefix = "INV-";
+
+      // Create the organization (rules allow this when ownerUid == current uid)
+      await setDoc(doc(db, "organizations", orgId), {
+        legalName: trimmed,
+        tin: "",
+        address: "",
+        invoicePrefix,
+        nextInvoiceSequence: 1,
+        defaultVatRate: 18,
+        lowStockThreshold: 10,
+        createdAt: serverTimestamp(),
+        ownerUid: user.uid,
+      });
+
+      // Link the current user to it (rules allow the owner of the users/{uid} doc to write it)
+      await setDoc(doc(db, "users", user.uid), {
+        email: user.email,
+        organizationId: orgId,
+        role: "owner",
+        createdAt: serverTimestamp(),
+      });
+
+      // Load it immediately into context
+      const org = await fetchOrganization(orgId);
+      setOrganization(org);
+
+      toast.success("Organization profile created");
+    } catch (error: any) {
+      console.error("initializeOrganization error:", error);
+      if (error?.code === "permission-denied" || (error?.message || "").includes("permission")) {
+        toast.error("Permission denied. Make sure firestore.rules are deployed (see docs/firebase-setup.md)");
+      } else {
+        toast.error("Failed to create organization profile");
+      }
+      throw error;
+    }
+  };
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       setLoading(true);
@@ -86,9 +141,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
         } catch (err: any) {
           console.error("Auth state org fetch error:", err);
-          // Surface a clear message when it's a permissions issue (very common during first setup)
+          // Surface a clear message when it's a permissions issue (very common during first setup or after Vercel deploy)
           if (err?.code === "permission-denied" || err?.message?.includes("permission")) {
-            toast.error("Firestore permission denied. Please set security rules (see docs/firebase-setup.md)");
+            toast.error("Firestore permission denied — deploy the rules: firebase deploy --only firestore:rules (see docs/firebase-setup.md)");
           }
           setOrganization(null);
         }
@@ -121,6 +176,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     loading,
     signOut,
     refreshOrganization,
+    initializeOrganization,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

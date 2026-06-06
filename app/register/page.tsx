@@ -4,8 +4,8 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createUserWithEmailAndPassword } from "firebase/auth";
-import { doc, setDoc, serverTimestamp } from "firebase/firestore";
-import { auth, db } from "@/lib/firebase";
+import { useAuth } from "@/lib/auth-context";
+import { auth } from "@/lib/firebase";
 import { toast } from "sonner";
 
 export default function RegisterPage() {
@@ -14,6 +14,7 @@ export default function RegisterPage() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const { initializeOrganization } = useAuth();
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,33 +25,13 @@ export default function RegisterPage() {
     setLoading(true);
 
     try {
-      // 1. Create Firebase Auth user
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      const firebaseUser = userCredential.user;
+      // 1. Create the Firebase Auth user first
+      await createUserWithEmailAndPassword(auth, email, password);
 
-      // 2. Create Organization document
-      const orgId = crypto.randomUUID(); // simple unique id for v1
-      const invoicePrefix = "INV-";
-
-      await setDoc(doc(db, "organizations", orgId), {
-        legalName: businessName.trim(),
-        tin: "",
-        address: "",
-        invoicePrefix,
-        nextInvoiceSequence: 1,
-        defaultVatRate: 18,
-        lowStockThreshold: 10,
-        createdAt: serverTimestamp(),
-        ownerUid: firebaseUser.uid,
-      });
-
-      // 3. Create user profile linking to the organization
-      await setDoc(doc(db, "users", firebaseUser.uid), {
-        email: firebaseUser.email,
-        organizationId: orgId,
-        role: "owner",
-        createdAt: serverTimestamp(),
-      });
+      // 2. Use the shared bootstrap function from auth context.
+      //    This creates the organization + users/{uid} link in one place (same logic used by the recovery form).
+      //    It is allowed by the current Firestore rules because we set ownerUid to the just-created user.
+      await initializeOrganization(businessName.trim());
 
       toast.success("Account created. Welcome!");
       router.push("/dashboard");
@@ -64,7 +45,7 @@ export default function RegisterPage() {
       } else if (error.code === "auth/invalid-email") {
         message = "Please enter a valid email address";
       } else if (error.code === "permission-denied" || (error.message && error.message.includes("permission"))) {
-        message = "Firestore permission denied. Set rules in Firebase Console (see docs/firebase-setup.md)";
+        message = "Firestore permission denied. Deploy the rules from this repo (firebase deploy --only firestore:rules) — see docs/firebase-setup.md";
       }
       toast.error(message);
     } finally {
