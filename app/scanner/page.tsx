@@ -20,8 +20,7 @@ export default function ScannerPage() {
         { fps: 10, qrbox: { width: 250, height: 250 } },
         (decodedText) => {
           setLastScanned(decodedText);
-          // In real version: look up product by barcode in Firestore
-          // then add to active cart via the activeCarts collection
+          // Future: look up product by barcode + add to shared active cart (realtime)
           html5QrCode.pause();
         },
         (errorMessage) => {
@@ -84,7 +83,7 @@ export default function ScannerPage() {
             <div className="text-sm text-gray-500">Last scanned code:</div>
             <div className="font-mono text-lg break-all">{lastScanned}</div>
             <div className="text-xs mt-2 text-emerald-600">
-              (Demo) In production this would instantly appear in the cart on your desktop or phone.
+              Scanned items can be added manually on the New Sale screen for now. Full cross-device active cart coming soon.
             </div>
           </div>
         )}

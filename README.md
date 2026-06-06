@@ -4,65 +4,63 @@
 
 No expensive hardware. Works during power cuts. Produces correct IRD TAX INVOICES from day one.
 
-## Current Status (Scaffold Complete)
+## Current Status (Production Ready Core)
 
-- Next.js 15 + TypeScript + Tailwind + shadcn-friendly setup
-- Firebase dependencies ready (Auth, Firestore, Storage)
-- All main screens from the MVP spec have working shells:
-  - Login / Register
-  - Dashboard (today’s summary, quick actions, recent activity)
-  - Products (list + add modal)
-  - New Sale + New Order (real cart, discount, payment, **live jsPDF TAX INVOICE**)
-  - Scanner (camera using html5-qrcode — works on phone)
-  - History, Reports, Settings
-- AppLayout with responsive nav (great on desktop + phone)
-- Real PDF generation for invoices (with amount in words)
-- Thermal receipt print hook (placeholder)
-- PWA manifest started
+- Next.js 15 + TypeScript + Tailwind
+- Firebase Auth + Firestore (multi-tenant, production security rules)
+- Full real data layer:
+  - Products fully persisted per organization (add/edit/delete, realtime stock)
+  - Sales & Orders: atomic transactions that safely deduct stock + advance invoice sequence + record immutable transactions
+  - Live TAX INVOICE PDFs using your actual business name, TIN, and correct invoice numbering
+- Settings: real org profile (name, TIN, prefix, low stock threshold)
+- History: real past transactions with PDF re-download
+- Dashboard: real recent activity + low stock counts
+- Scanner + PWA manifest ready (offline persistence enabled)
+- Proper Vercel config + security headers
 
 See:
 - [docs/MVP-Spec-v1.md](./docs/MVP-Spec-v1.md)
-- [docs/tech-architecture.md](./docs/tech-architecture.md) (decisions locked)
+- [docs/tech-architecture.md](./docs/tech-architecture.md)
 
-## Quick Start (Development)
+## Important: Production Firebase Setup
+
+**Before going live with real customers:**
+
+1. Use a **separate production Firebase project** (recommended) or lock down rules on your current project.
+2. Deploy the production rules:
+   ```bash
+   firebase deploy --only firestore:rules
+   ```
+3. Set all `NEXT_PUBLIC_FIREBASE_*` variables in your Vercel project settings (use the production Firebase config).
+4. Copy `.env.example` → `.env.local` for local development.
+
+See [docs/firebase-setup.md](./docs/firebase-setup.md) for details.
+
+## Quick Start (Local)
 
 ```bash
-# 1. Copy env and fill your Firebase web app config
-cp .env.local.example .env.local
-# Edit .env.local with your Firebase keys
-
-# 2. Run
+cp .env.example .env.local
+# fill your Firebase keys
 npm run dev
 ```
 
-Open http://localhost:3000
+Register a business → you get a real organization. Everything (products, sales, invoices, history) is now stored in Firestore and scoped to your org.
 
-You can currently:
-- Create account / login (demo)
-- Navigate all screens
-- Add products to cart in New Sale
-- Complete a sale → real PDF TAX INVOICE is generated and downloaded
-- Use the Scanner (camera permission required)
-- See the “Print Receipt (Thermal)” button in the success modal
+## Key Production Features
 
-## Next (Real Firebase Integration)
-
-We will now wire:
-- Real Email + Password auth with Firebase
-- Organization document on signup (business profile, TIN, invoice prefix)
-- Products stored in Firestore per organization
-- Active cart (for phone ↔ desktop scanner)
-- Immutable transactions + stock movements on sale completion
-- Proper offline behavior + sync
-- Refined IRD invoice template (more accurate layout + fields)
+- **Atomic sales**: stock deduction + invoice sequence + transaction record happen together or not at all.
+- **Org-scoped security rules**: users can only see and modify their own organization's data.
+- **Offline resilient**: Firestore persistence enabled (works during power cuts; syncs when back online).
+- **Correct IRD-style invoices** generated client-side with real business data + amount in words.
+- Deployed on Vercel.
 
 ## Tech Notes
 
-- Straight to Firebase (as decided)
-- Simplest active cart model using `activeCarts/{org_user}` documents + realtime
-- PDF primary + thermal receipt print support
-- Invoice numbering designed to support branches later
+- Firebase (Auth + Firestore) with production security rules
+- Client-side PDF invoices (jsPDF) using live org data
+- Strong emphasis on atomic operations for stock + numbering
+- PWA + offline persistence for Sri Lankan power/internet realities
 
 ---
 
-Run `npm run dev` and start clicking through the flows. Let me know what to build next (real auth + Firestore products is the logical immediate step).
+The core ERP flows (products, sales with stock, invoicing, history) are now production-backed. Next logical additions: improved scanner cross-device sync, better reports, email receipts, roles/staff accounts.

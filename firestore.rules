@@ -1,0 +1,81 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ============================================================
+    // PRODUCTION RULES — Popylabs ERP (multi-tenant by organization)
+    //
+    // Security model (v1):
+    // - One organization per user (owner).
+    // - Users can only access their own organization's data.
+    // - Products, sales/transactions, and org settings are scoped by organizationId.
+    // - Bootstrap: during registration a user may create their first org (ownerUid check).
+    //
+    // Deploy with:
+    //   firebase deploy --only firestore:rules
+    //
+    // Never use the old broad "any authenticated user" rule in production.
+    // ============================================================
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // The user's profile doc stores their organizationId
+    function getUserOrganizationId() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.organizationId;
+    }
+
+    // --- Users (profile linking auth user -> organization) ---
+    match /users/{userId} {
+      // User can read/write only their own profile document
+      allow read, write: if isSignedIn() && userId == request.auth.uid;
+
+      // Allow creation of the user's own profile during registration flow
+      allow create: if isSignedIn() && userId == request.auth.uid;
+    }
+
+    // --- Organizations ---
+    match /organizations/{orgId} {
+      // Owner can create their org during register (we verify ownerUid in the data)
+      allow create: if isSignedIn() &&
+        request.resource.data.ownerUid == request.auth.uid;
+
+      // Read / update only if this org belongs to the signed-in user's profile
+      // (or they are explicitly the ownerUid on the org doc)
+      allow read, update: if isSignedIn() &&
+        (getUserOrganizationId() == orgId ||
+         resource.data.ownerUid == request.auth.uid);
+    }
+
+    // --- Products (stock, pricing, barcodes) ---
+    match /products/{productId} {
+      // Must belong to the user's current organization
+      allow read: if isSignedIn() &&
+        resource.data.organizationId == getUserOrganizationId();
+
+      allow create: if isSignedIn() &&
+        request.resource.data.organizationId == getUserOrganizationId();
+
+      allow update, delete: if isSignedIn() &&
+        resource.data.organizationId == getUserOrganizationId();
+    }
+
+    // --- Transactions / Sales (immutable records + invoice data) ---
+    match /transactions/{txnId} {
+      allow read: if isSignedIn() &&
+        resource.data.organizationId == getUserOrganizationId();
+
+      // Only create is allowed from the app (no client updates/deletes)
+      allow create: if isSignedIn() &&
+        request.resource.data.organizationId == getUserOrganizationId() &&
+        // Basic sanity: must have key fields
+        request.resource.data.total is number &&
+        request.resource.data.invoiceNumber is string;
+    }
+
+    // Deny everything else by default
+  }
+}
+

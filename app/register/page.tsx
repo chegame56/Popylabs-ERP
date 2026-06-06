@@ -3,6 +3,10 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { createUserWithEmailAndPassword } from "firebase/auth";
+import { doc, setDoc, serverTimestamp } from "firebase/firestore";
+import { auth, db } from "@/lib/firebase";
+import { toast } from "sonner";
 
 export default function RegisterPage() {
   const [businessName, setBusinessName] = useState("");
@@ -13,15 +17,59 @@ export default function RegisterPage() {
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!businessName.trim()) {
+      toast.error("Please enter your business name");
+      return;
+    }
     setLoading(true);
 
-    // TODO: Real Firebase createUser + create organization doc
-    setTimeout(() => {
-      localStorage.setItem("popylabs_demo_user", email);
-      // In real flow we would create the org here
+    try {
+      // 1. Create Firebase Auth user
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const firebaseUser = userCredential.user;
+
+      // 2. Create Organization document
+      const orgId = crypto.randomUUID(); // simple unique id for v1
+      const invoicePrefix = "INV-";
+
+      await setDoc(doc(db, "organizations", orgId), {
+        legalName: businessName.trim(),
+        tin: "",
+        address: "",
+        invoicePrefix,
+        nextInvoiceSequence: 1,
+        defaultVatRate: 18,
+        lowStockThreshold: 10,
+        createdAt: serverTimestamp(),
+        ownerUid: firebaseUser.uid,
+      });
+
+      // 3. Create user profile linking to the organization
+      await setDoc(doc(db, "users", firebaseUser.uid), {
+        email: firebaseUser.email,
+        organizationId: orgId,
+        role: "owner",
+        createdAt: serverTimestamp(),
+      });
+
+      toast.success("Account created. Welcome!");
       router.push("/dashboard");
+    } catch (error: any) {
+      console.error(error);
+      let message = "Failed to create account";
+      if (error.code === "auth/email-already-in-use") {
+        message = "This email is already registered";
+      } else if (error.code === "auth/weak-password") {
+        message = "Password should be at least 6 characters";
+      } else if (error.code === "auth/invalid-email") {
+        message = "Please enter a valid email address";
+      } else if (error.code === "permission-denied" || (error.message && error.message.includes("permission"))) {
+        message = "Firestore permission denied. Set rules in Firebase Console (see docs/firebase-setup.md)";
+      }
+      toast.error(message);
+    } finally {
       setLoading(false);
-    }, 800);
+    }
   };
 
   return (

@@ -3,8 +3,10 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { signInWithEmailAndPassword } from "firebase/auth";
+import { auth } from "@/lib/firebase";
+import { toast } from "sonner";
 
-// Temporary: Will be replaced with real Firebase Auth
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -15,14 +17,22 @@ export default function LoginPage() {
     e.preventDefault();
     setLoading(true);
 
-    // TODO: Replace with real Firebase signInWithEmailAndPassword
-    // For now: fake login and go to dashboard
-    setTimeout(() => {
-      // Simulate successful auth
-      localStorage.setItem("popylabs_demo_user", email);
+    try {
+      await signInWithEmailAndPassword(auth, email, password);
+      toast.success("Signed in successfully");
       router.push("/dashboard");
+    } catch (error: any) {
+      console.error(error);
+      let message = "Failed to sign in";
+      if (error.code === "auth/user-not-found" || error.code === "auth/wrong-password" || error.code === "auth/invalid-credential") {
+        message = "Invalid email or password";
+      } else if (error.code === "auth/too-many-requests") {
+        message = "Too many attempts. Please try again later.";
+      }
+      toast.error(message);
+    } finally {
       setLoading(false);
-    }, 600);
+    }
   };
 
   return (
@@ -75,7 +85,7 @@ export default function LoginPage() {
         </div>
 
         <p className="mt-8 text-[10px] text-center text-gray-400">
-          For demo only. Real Firebase Auth coming in next step.
+          Secure login powered by Firebase
         </p>
       </div>
     </div>

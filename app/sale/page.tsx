@@ -2,9 +2,23 @@
 
 import AppLayout from "@/components/AppLayout";
 import { useSearchParams } from "next/navigation";
-import { useState, Suspense } from "react";
+import { useState, Suspense, useEffect } from "react";
 import jsPDF from "jspdf";
 import { amountInWords, generateInvoiceNumber } from "@/lib/utils";
+import { useAuth } from "@/lib/auth-context";
+import { Product } from "@/lib/types";
+import {
+  collection,
+  query,
+  where,
+  orderBy,
+  onSnapshot,
+  runTransaction,
+  doc,
+  serverTimestamp,
+} from "firebase/firestore";
+import { db } from "@/lib/firebase";
+import { toast } from "sonner";
 
 interface CartItem {
   id: string;
@@ -13,28 +27,52 @@ interface CartItem {
   qty: number;
 }
 
-const demoProducts = [
-  { id: "p1", name: "Coca Cola 1L", price: 280 },
-  { id: "p2", name: "White Bread", price: 120 },
-  { id: "p3", name: "Eggs (10 pack)", price: 380 },
-  { id: "p4", name: "Rice 1kg", price: 220 },
-];
-
 function SaleContent() {
   const searchParams = useSearchParams();
   const mode = searchParams.get("mode") === "order" ? "order" : "sale";
+  const { organization, user } = useAuth();
 
+  const [products, setProducts] = useState<Product[]>([]);
+  const [productsLoading, setProductsLoading] = useState(true);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [discount, setDiscount] = useState(0);
   const [paymentMethod, setPaymentMethod] = useState<"Cash" | "Card" | "Transfer">("Cash");
   const [customerName, setCustomerName] = useState("");
   const [showInvoice, setShowInvoice] = useState(false);
   const [lastInvoiceNumber, setLastInvoiceNumber] = useState("");
+  const [completing, setCompleting] = useState(false);
+
+  // Load real products for this organization (live)
+  useEffect(() => {
+    if (!organization) {
+      setProductsLoading(false);
+      return;
+    }
+    const q = query(
+      collection(db, "products"),
+      where("organizationId", "==", organization.id),
+      orderBy("name")
+    );
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const list: Product[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+        setProducts(list);
+        setProductsLoading(false);
+      },
+      (err) => {
+        console.error("Sale products load error:", err);
+        toast.error("Could not load your products");
+        setProductsLoading(false);
+      }
+    );
+    return () => unsub();
+  }, [organization]);
 
   const subtotal = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
   const total = Math.max(0, subtotal - discount);
 
-  const addToCart = (product: { id: string; name: string; price: number }) => {
+  const addToCart = (product: Product) => {
     setCart((prev) => {
       const existing = prev.find((i) => i.id === product.id);
       if (existing) {
@@ -42,7 +80,7 @@ function SaleContent() {
           i.id === product.id ? { ...i, qty: i.qty + 1 } : i
         );
       }
-      return [...prev, { ...product, qty: 1 }];
+      return [...prev, { id: product.id, name: product.name, price: product.price, qty: 1 }];
     });
   };
 
@@ -55,64 +93,154 @@ function SaleContent() {
     setCart((prev) => prev.filter((i) => i.id !== id));
   };
 
-  const completeSale = () => {
-    if (cart.length === 0) return;
+  const completeSale = async () => {
+    if (cart.length === 0 || !organization || !user) return;
 
-    const invoiceNumber = generateInvoiceNumber("INV-", Math.floor(Math.random() * 900) + 100);
+    setCompleting(true);
 
-    // Generate real PDF (IRD style - simplified for v1)
-    const doc = new jsPDF();
-    doc.setFontSize(16);
-    doc.text("TAX INVOICE", 105, 20, { align: "center" });
+    try {
+      // Use a Firestore transaction for atomicity:
+      // - Read current org sequence
+      // - Decrement stock for each line item (with stock check)
+      // - Create transaction record
+      // - Increment nextInvoiceSequence on the org
+      const result = await runTransaction(db, async (transaction) => {
+        // 1. Read org for sequence + prefix
+        const orgRef = doc(db, "organizations", organization.id);
+        const orgSnap = await transaction.get(orgRef);
+        if (!orgSnap.exists()) throw new Error("Organization not found");
 
-    doc.setFontSize(11);
-    doc.text("Popylabs Demo Business", 20, 32);
-    doc.text("TIN: 123456789V", 20, 38);
-    doc.text(`Invoice No: ${invoiceNumber}`, 20, 44);
-    doc.text(`Date: ${new Date().toLocaleDateString()}`, 20, 50);
-    doc.text(`Payment: ${paymentMethod}`, 20, 56);
+        const orgData = orgSnap.data() as any;
+        const prefix = orgData.invoicePrefix || "INV-";
+        const currentSeq = orgData.nextInvoiceSequence || 1;
 
-    if (mode === "order" && customerName) {
-      doc.text(`Customer: ${customerName}`, 20, 62);
-    }
+        const invoiceNumber = generateInvoiceNumber(prefix, currentSeq);
 
-    // Items
-    let y = 72;
-    doc.setFontSize(10);
-    cart.forEach((item) => {
-      doc.text(`${item.name} x${item.qty}`, 20, y);
-      doc.text(`LKR ${(item.price * item.qty).toFixed(0)}`, 160, y, { align: "right" });
+        // 2. Read + validate + prepare stock updates for every cart item
+        const productRefsAndUpdates: Array<{ ref: any; newStock: number; item: CartItem }> = [];
+
+        for (const cartItem of cart) {
+          const prodRef = doc(db, "products", cartItem.id);
+          const prodSnap = await transaction.get(prodRef);
+
+          if (!prodSnap.exists()) {
+            throw new Error(`Product "${cartItem.name}" no longer exists`);
+          }
+
+          const prodData = prodSnap.data() as any;
+          if (prodData.organizationId !== organization.id) {
+            throw new Error("Product does not belong to your organization");
+          }
+
+          const currentStock: number = prodData.stock ?? 0;
+          if (currentStock < cartItem.qty) {
+            throw new Error(`Not enough stock for "${cartItem.name}" (have ${currentStock})`);
+          }
+
+          productRefsAndUpdates.push({
+            ref: prodRef,
+            newStock: currentStock - cartItem.qty,
+            item: cartItem,
+          });
+        }
+
+        // 3. Apply stock decrements
+        for (const u of productRefsAndUpdates) {
+          transaction.update(u.ref, { stock: u.newStock, updatedAt: serverTimestamp() });
+        }
+
+        // 4. Create the transaction record
+        const txnRef = doc(collection(db, "transactions")); // auto id
+        const txnData = {
+          organizationId: organization.id,
+          type: mode,
+          invoiceNumber,
+          items: cart.map((c) => ({
+            productId: c.id,
+            name: c.name,
+            price: c.price,
+            qty: c.qty,
+          })),
+          subtotal,
+          discount,
+          total,
+          paymentMethod,
+          customerName: mode === "order" ? (customerName.trim() || undefined) : undefined,
+          createdAt: serverTimestamp(),
+          createdByUid: user.uid,
+        };
+        transaction.set(txnRef, txnData);
+
+        // 5. Advance the invoice sequence on the org
+        transaction.update(orgRef, {
+          nextInvoiceSequence: currentSeq + 1,
+        });
+
+        return { invoiceNumber, txnId: txnRef.id };
+      });
+
+      // Success — generate the PDF using real data
+      const invoiceNumber = result.invoiceNumber;
+
+      const docPdf = new jsPDF();
+      docPdf.setFontSize(16);
+      docPdf.text("TAX INVOICE", 105, 20, { align: "center" });
+
+      docPdf.setFontSize(11);
+      docPdf.text(organization.legalName || "Your Business", 20, 32);
+      if (organization.tin) docPdf.text(`TIN: ${organization.tin}`, 20, 38);
+      docPdf.text(`Invoice No: ${invoiceNumber}`, 20, 44);
+      docPdf.text(`Date: ${new Date().toLocaleDateString()}`, 20, 50);
+      docPdf.text(`Payment: ${paymentMethod}`, 20, 56);
+
+      if (mode === "order" && customerName) {
+        docPdf.text(`Customer: ${customerName}`, 20, 62);
+      }
+
+      // Items
+      let y = 72;
+      docPdf.setFontSize(10);
+      cart.forEach((item) => {
+        docPdf.text(`${item.name} x${item.qty}`, 20, y);
+        docPdf.text(`LKR ${(item.price * item.qty).toFixed(0)}`, 160, y, { align: "right" });
+        y += 7;
+      });
+
+      y += 4;
+      docPdf.text(`Subtotal: LKR ${subtotal}`, 160, y, { align: "right" });
       y += 7;
-    });
+      if (discount > 0) docPdf.text(`Discount: LKR ${discount}`, 160, y, { align: "right" });
+      y += 7;
+      docPdf.setFontSize(12);
+      docPdf.text(`TOTAL: LKR ${total}`, 160, y, { align: "right" });
 
-    y += 4;
-    doc.text(`Subtotal: LKR ${subtotal}`, 160, y, { align: "right" });
-    y += 7;
-    if (discount > 0) doc.text(`Discount: LKR ${discount}`, 160, y, { align: "right" });
-    y += 7;
-    doc.setFontSize(12);
-    doc.text(`TOTAL: LKR ${total}`, 160, y, { align: "right" });
+      y += 10;
+      docPdf.setFontSize(10);
+      docPdf.text(amountInWords(total), 20, y);
 
-    y += 10;
-    doc.setFontSize(10);
-    doc.text(amountInWords(total), 20, y);
+      docPdf.text("Thank you for your business!", 105, y + 20, { align: "center" });
 
-    doc.text("Thank you for your business!", 105, y + 20, { align: "center" });
+      docPdf.save(`${invoiceNumber}.pdf`);
 
-    // Save / open PDF
-    doc.save(`${invoiceNumber}.pdf`);
+      setLastInvoiceNumber(invoiceNumber);
+      setShowInvoice(true);
 
-    // For thermal receipt (future: open a print-optimized view)
-    setLastInvoiceNumber(invoiceNumber);
-    setShowInvoice(true);
-
-    // In real version: write transaction + stock movements to Firestore here
-    // Then clear cart
-    setTimeout(() => {
+      // Clear cart + state on success
       setCart([]);
       setDiscount(0);
-    }, 1200);
+      setCustomerName("");
+
+      toast.success(`Sale recorded • ${invoiceNumber}`);
+    } catch (err: any) {
+      console.error("Complete sale transaction error:", err);
+      const msg = err?.message || "Failed to complete sale. Please try again.";
+      toast.error(msg.length > 120 ? msg.slice(0, 117) + "..." : msg);
+    } finally {
+      setCompleting(false);
+    }
   };
+
+  const lowStockThreshold = organization?.lowStockThreshold ?? 10;
 
   return (
     <AppLayout>
@@ -121,27 +249,47 @@ function SaleContent() {
           <h1 className="text-2xl font-semibold">
             {mode === "order" ? "New Order (Online)" : "New Sale"}
           </h1>
-          <div className="text-sm text-gray-500">Demo • No real stock deduction yet</div>
+          <div className="text-sm text-gray-500">
+            {organization ? organization.legalName : "Loading..."}
+          </div>
         </div>
 
         <div className="grid md:grid-cols-5 gap-6">
-          {/* Product picker */}
+          {/* Product picker (real data) */}
           <div className="md:col-span-3 bg-white rounded-2xl border p-4">
-            <div className="font-medium mb-3">Products</div>
-            <div className="grid grid-cols-2 gap-3">
-              {demoProducts.map((p) => (
-                <button
-                  key={p.id}
-                  onClick={() => addToCart(p)}
-                  className="border rounded-xl p-4 text-left active:bg-gray-50 hover:bg-gray-50"
-                >
-                  <div className="font-medium">{p.name}</div>
-                  <div className="text-sm text-gray-600">LKR {p.price}</div>
-                </button>
-              ))}
+            <div className="font-medium mb-3 flex items-center justify-between">
+              <span>Products</span>
+              {productsLoading && <span className="text-xs text-gray-400">loading…</span>}
             </div>
+
+            {products.length === 0 && !productsLoading && (
+              <p className="text-sm text-gray-500 py-4">
+                No products yet. Go to <a href="/products" className="underline">Products</a> to add some.
+              </p>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              {products.map((p) => {
+                const low = p.stock < lowStockThreshold;
+                return (
+                  <button
+                    key={p.id}
+                    onClick={() => addToCart(p)}
+                    disabled={p.stock <= 0}
+                    className="border rounded-xl p-4 text-left active:bg-gray-50 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <div className="font-medium">{p.name}</div>
+                    <div className="text-sm text-gray-600">LKR {p.price}</div>
+                    <div className={`text-xs mt-0.5 ${low ? "text-red-600" : "text-gray-500"}`}>
+                      {p.stock} in stock {low && "• low"}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
             <p className="mt-4 text-xs text-gray-500">
-              In real version this will search your products + support phone scanner.
+              Stock is deducted in real time when you complete a sale.
             </p>
           </div>
 
@@ -210,10 +358,10 @@ function SaleContent() {
 
               <button
                 onClick={completeSale}
-                disabled={cart.length === 0}
+                disabled={cart.length === 0 || completing || !organization}
                 className="btn-large w-full bg-emerald-600 text-white rounded-2xl font-medium disabled:opacity-50"
               >
-                Complete {mode === "order" ? "Order" : "Sale"} & Generate TAX INVOICE
+                {completing ? "Recording sale..." : `Complete ${mode === "order" ? "Order" : "Sale"} & Generate TAX INVOICE`}
               </button>
             </div>
           </div>
@@ -225,6 +373,7 @@ function SaleContent() {
             <div className="bg-white rounded-2xl p-6 max-w-md w-full">
               <h3 className="font-semibold text-lg">TAX INVOICE Generated</h3>
               <p className="mt-1">Invoice #{lastInvoiceNumber} has been downloaded as PDF.</p>
+              <p className="text-xs text-gray-500 mt-1">Stock has been updated in your inventory.</p>
 
               <div className="mt-4 flex gap-3">
                 <button
@@ -237,7 +386,6 @@ function SaleContent() {
                 </button>
                 <button
                   onClick={() => {
-                    // In future: open a dedicated narrow receipt print view
                     alert("Thermal receipt print view would open here (80mm optimized)");
                   }}
                   className="flex-1 py-3 rounded-xl bg-black text-white"
