@@ -1,8 +1,9 @@
 "use client";
 
 import AppLayout from "@/components/AppLayout";
-import { useState, useEffect } from "react";
-import { Plus, Search, Edit2, Trash2 } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { Plus, Search, Edit2, Trash2, Scan } from "lucide-react";
+import { Html5Qrcode } from "html5-qrcode";
 import { useAuth } from "@/lib/auth-context";
 import { Product } from "@/lib/types";
 import {
@@ -17,6 +18,7 @@ import {
   doc,
   serverTimestamp,
   deleteField,
+  limit,
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { toast } from "sonner";
@@ -40,6 +42,17 @@ export default function ProductsPage() {
     imageUrl: "",
   });
 
+  // Local "Add with Scanner" modal state (instant/same-device path)
+  const [showScannerAdd, setShowScannerAdd] = useState(false);
+  const [isScanning, setIsScanning] = useState(false);
+  const [lastScanned, setLastScanned] = useState<string | null>(null);
+  const scannerRef = useRef<Html5Qrcode | null>(null);
+  const scannerContainerId = "add-product-scanner";
+  // Shared with intent listener for cross-device dedup
+  const handledIntentIds = useRef(new Set<string>());
+  // Latest products for the intent listener (avoids stale closure without re-subscribing on every list change)
+  const productsRef = useRef<Product[]>([]);
+
   // Real-time products for this organization
   useEffect(() => {
     if (!organization) {
@@ -61,6 +74,7 @@ export default function ProductsPage() {
           ...(d.data() as Omit<Product, "id">),
         }));
         setProducts(list);
+        productsRef.current = list;
         setLoadError(null);
         setLoading(false);
       },
@@ -83,6 +97,87 @@ export default function ProductsPage() {
     return () => unsubscribe();
   }, [organization, listRetry]);
 
+  // Camera cleanup for the Add-with-Scanner modal (prevents leaks on unmount / route change)
+  useEffect(() => {
+    return () => {
+      if (scannerRef.current) {
+        scannerRef.current.stop().catch(() => {});
+      }
+    };
+  }, []);
+
+  // Also stop scanner when the scanner modal is closed externally
+  useEffect(() => {
+    if (!showScannerAdd && scannerRef.current) {
+      scannerRef.current.stop().catch(() => {});
+      scannerRef.current = null;
+      setIsScanning(false);
+    }
+  }, [showScannerAdd]);
+
+  // Lightweight cross-device signaling listener (hybrid: phone scanner → this desktop opens the prefilled Add form)
+  // Follows the same "simplest realtime" pattern described in docs/tech-architecture.md for carts.
+  useEffect(() => {
+    if (!organization) return;
+
+    const intentQuery = query(
+      collection(db, "productAddIntents"),
+      where("organizationId", "==", organization.id),
+      orderBy("createdAt", "desc"),
+      limit(8)
+    );
+
+    const unsubscribeIntents = onSnapshot(
+      intentQuery,
+      (snap) => {
+        snap.docChanges().forEach((change) => {
+          if (change.type !== "added" && change.type !== "modified") return;
+
+          const id = change.doc.id;
+          if (handledIntentIds.current.has(id)) return;
+
+          const data = change.doc.data() as any;
+          const bc = (data?.barcode || "").toString().trim();
+          if (!bc) {
+            // Malformed — consume it
+            deleteDoc(doc(db, "productAddIntents", id)).catch(() => {});
+            handledIntentIds.current.add(id);
+            return;
+          }
+
+          // Use the ref so we see the freshest list even if this callback closed over an older render
+          const currentProducts = productsRef.current.length ? productsRef.current : products;
+          const alreadyExists = currentProducts.some(
+            (p) => p.barcode && p.barcode.trim() === bc
+          );
+
+          if (alreadyExists) {
+            deleteDoc(doc(db, "productAddIntents", id)).catch(() => {});
+            handledIntentIds.current.add(id);
+            return;
+          }
+
+          // This is new for the org — open the *exact same* Add Product modal the local scanner and manual button use
+          handledIntentIds.current.add(id);
+          resetForm();
+          setForm((f) => ({ ...f, barcode: bc }));
+          setShowAdd(true);
+
+          // Consume immediately so other tabs / other desktops in the same org do not also pop the modal
+          deleteDoc(doc(db, "productAddIntents", id)).catch(() => {});
+
+          toast.info("New barcode from scanner — complete the product details");
+        });
+      },
+      (err) => {
+        // Non-fatal for the main products list; just log
+        console.warn("productAddIntents listener error (non-fatal):", err);
+      }
+    );
+
+    return () => unsubscribeIntents();
+  }, [organization]);
+
   const filtered = products.filter((p) =>
     p.name.toLowerCase().includes(search.toLowerCase()) ||
     (p.barcode && p.barcode.toLowerCase().includes(search.toLowerCase()))
@@ -94,6 +189,8 @@ export default function ProductsPage() {
   };
 
   const openAdd = () => {
+    // Close scanner modal if it is open so the two modals never overlap
+    if (showScannerAdd) closeScannerAdd();
     resetForm();
     setShowAdd(true);
   };
@@ -113,7 +210,90 @@ export default function ProductsPage() {
   const closeModal = () => {
     setShowAdd(false);
     resetForm();
+    // Also ensure scanner is not left running in background
+    if (showScannerAdd) closeScannerAdd();
   };
+
+  // --- Local scanner controls for "Add with Scanner" (reuses patterns from app/scanner/page.tsx) ---
+  const openScannerAdd = () => {
+    // Ensure we don't have the manual modal fighting with the scanner one
+    if (showAdd) {
+      setShowAdd(false);
+      resetForm();
+    }
+    setLastScanned(null);
+    setShowScannerAdd(true);
+  };
+
+  const startScannerForAdd = async () => {
+    try {
+      const html5QrCode = new Html5Qrcode(scannerContainerId);
+      scannerRef.current = html5QrCode;
+
+      await html5QrCode.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 250, height: 250 } },
+        (decodedText) => {
+          setLastScanned(decodedText);
+          html5QrCode.pause();
+          handleScannedCode(decodedText);
+        },
+        (_errorMessage) => {
+          // ignore continuous scan errors (same as scanner page)
+        }
+      );
+      setIsScanning(true);
+    } catch (err: any) {
+      console.error("Camera start failed:", err);
+      const msg = (err?.message || "").toLowerCase();
+      if (msg.includes("permission") || msg.includes("denied") || msg.includes("not allowed")) {
+        toast.error("Camera permission denied. Please allow camera access in your browser settings and try again.");
+      } else if (msg.includes("not found") || msg.includes("no camera")) {
+        toast.error("No camera found on this device.");
+      } else if (window.location.protocol !== "https:" && window.location.hostname !== "localhost") {
+        toast.error("Camera requires HTTPS. Please access over a secure connection.");
+      } else {
+        toast.error("Camera access failed. Please allow camera permission and ensure you're on HTTPS or localhost.");
+      }
+    }
+  };
+
+  const stopScannerForAdd = async () => {
+    if (scannerRef.current) {
+      await scannerRef.current.stop();
+      scannerRef.current = null;
+    }
+    setIsScanning(false);
+  };
+
+  const closeScannerAdd = () => {
+    stopScannerForAdd().catch(() => {});
+    setShowScannerAdd(false);
+    setIsScanning(false);
+    setLastScanned(null);
+  };
+
+  const handleScannedCode = (code: string) => {
+    const trimmed = code.trim();
+    if (!trimmed) return;
+
+    const existing = products.find(
+      (p) => p.barcode && p.barcode.trim() === trimmed
+    );
+    if (existing) {
+      toast.error(`Barcode already used by "${existing.name}"`);
+      // Leave the scanner modal open/paused so the user can scan another item
+      return;
+    }
+
+    // New barcode — transition to the *exact same* unchanged Add Product modal with barcode pre-filled
+    resetForm();
+    setForm((f) => ({ ...f, barcode: trimmed }));
+    closeScannerAdd();
+    setShowAdd(true);
+  };
+
+  // --- End local scanner controls ---
 
   const handleSaveProduct = async () => {
     if (!organization || !user) {
@@ -227,6 +407,13 @@ export default function ProductsPage() {
           className="btn-large flex items-center gap-2 bg-black text-white px-5 rounded-xl"
         >
           <Plus className="w-4 h-4" /> Add Product
+        </button>
+        {/* Second button — "Add with Scanner". The manual Add Product button above is left 100% unchanged. */}
+        <button
+          onClick={openScannerAdd}
+          className="btn-large flex items-center gap-2 border px-5 rounded-xl"
+        >
+          <Scan className="w-4 h-4" /> Add with Scanner
         </button>
       </div>
 
@@ -352,6 +539,54 @@ export default function ProductsPage() {
               >
                 {editingProduct ? "Save Changes" : "Add Product"}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Dedicated "Add with Scanner" modal — local/instant path. Same visual style as the Add Product modal. */}
+      {showScannerAdd && (
+        <div className="fixed inset-0 bg-black/40 flex items-end md:items-center justify-center z-50">
+          <div className="bg-white w-full md:w-[420px] rounded-t-2xl md:rounded-2xl p-6">
+            <h3 className="font-semibold text-lg mb-2">Add with Scanner</h3>
+            <p className="text-sm text-gray-600 mb-4">
+              Scan a product barcode. If it is new, the normal Add Product form will open with the barcode already filled.
+            </p>
+
+            <div
+              id={scannerContainerId}
+              className="w-full bg-black rounded-2xl overflow-hidden aspect-square mb-4"
+            />
+
+            <div className="flex gap-3 mb-3">
+              {!isScanning ? (
+                <button
+                  onClick={startScannerForAdd}
+                  className="flex-1 btn-large bg-black text-white rounded-2xl"
+                >
+                  Start Camera
+                </button>
+              ) : (
+                <button
+                  onClick={stopScannerForAdd}
+                  className="flex-1 btn-large border rounded-2xl"
+                >
+                  Stop Camera
+                </button>
+              )}
+              <button onClick={closeScannerAdd} className="flex-1 py-3 rounded-2xl border">
+                Cancel
+              </button>
+            </div>
+
+            {lastScanned && (
+              <div className="text-xs text-gray-500">
+                Last scanned: <span className="font-mono">{lastScanned}</span>
+              </div>
+            )}
+
+            <div className="mt-4 text-[11px] text-gray-500">
+              Tip: Use the same account on phone + desktop for the hybrid experience (phone camera feeds the desktop Products screen).
             </div>
           </div>
         </div>

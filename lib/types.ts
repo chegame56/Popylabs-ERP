@@ -60,3 +60,15 @@ export interface Transaction {
   createdAt: any;                  // Firestore Timestamp
   createdByUid?: string;
 }
+
+// Lightweight cross-device signaling doc (phone scanner → desktop Products page opens the prefilled Add form).
+// Collection: productAddIntents
+// These are transient (deleted immediately after the receiving client acts on them).
+export interface ProductAddIntent {
+  id?: string;
+  organizationId: string;
+  barcode: string;
+  createdAt?: any;                 // serverTimestamp
+  createdBy?: string | null;       // uid
+  source?: "scanner" | "products-scanner-modal" | string;
+}

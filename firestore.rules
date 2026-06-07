@@ -66,6 +66,17 @@ service cloud.firestore {
         resource.data.organizationId == getUserOrganizationId();
     }
 
+    // --- Transient signaling for hybrid "phone scan → desktop add product form" ---
+    // Very low volume, short-lived docs. Writer (scanner) creates; any org member (desktop products page) can read + delete on consumption.
+    match /productAddIntents/{intentId} {
+      allow read, create: if isSignedIn() &&
+        request.resource.data.organizationId == getUserOrganizationId();
+
+      allow delete: if isSignedIn() &&
+        resource.data.organizationId == getUserOrganizationId();
+      // No client updates — intents are fire-and-consume only.
+    }
+
     // --- Transactions / Sales (immutable records + invoice data) ---
     match /transactions/{txnId} {
       allow read: if isSignedIn() &&
