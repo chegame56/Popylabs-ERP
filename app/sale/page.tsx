@@ -80,7 +80,8 @@ function SaleContent() {
   }, [organization]);
 
   const subtotal = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
-  const vatRate = organization?.defaultVatRate ?? 18;
+  const isTaxMode = organization?.issuesTaxInvoices ?? false;
+  const vatRate = isTaxMode ? (organization?.defaultVatRate ?? 18) : 0;
   const totals = computeInvoiceTotals(subtotal, discount, vatRate);
   const grandTotal = totals.grandTotal;
 
@@ -208,7 +209,7 @@ function SaleContent() {
         return { invoiceNumber, txnId: txnRef.id, txnDataForStore };
       });
 
-      // Success — generate the full IRD-compliant professional PDF
+      // Success — generate professional bill PDF (dual output ready)
       const invoiceNumber = result.invoiceNumber;
       const txnSnapshot = {
         ...result.txnDataForStore,
@@ -334,18 +335,22 @@ function SaleContent() {
                 />
               </div>
 
-              <div className="flex justify-between text-sm">
-                <span>Taxable Value</span>
-                <span>LKR {totals.taxableValue}</span>
-              </div>
+              {isTaxMode && (
+                <>
+                  <div className="flex justify-between text-sm">
+                    <span>Taxable Value</span>
+                    <span>LKR {totals.taxableValue}</span>
+                  </div>
 
-              <div className="flex justify-between text-sm">
-                <span>VAT @ {totals.vatRate}%</span>
-                <span>LKR {totals.vatAmount}</span>
-              </div>
+                  <div className="flex justify-between text-sm">
+                    <span>VAT @ {totals.vatRate}%</span>
+                    <span>LKR {totals.vatAmount}</span>
+                  </div>
+                </>
+              )}
 
               <div className="flex justify-between font-semibold text-lg border-t pt-2">
-                <span>Total (incl. VAT)</span>
+                <span>{isTaxMode ? "Total (incl. VAT)" : "Total"}</span>
                 <span>LKR {grandTotal}</span>
               </div>
 
@@ -383,19 +388,19 @@ function SaleContent() {
                 disabled={cart.length === 0 || completing || !organization}
                 className="btn-large w-full bg-emerald-600 text-white rounded-2xl font-medium disabled:opacity-50"
               >
-                {completing ? "Recording sale..." : `Complete ${mode === "order" ? "Order" : "Sale"} & Generate TAX INVOICE`}
+                {completing ? "Recording sale..." : `Complete ${mode === "order" ? "Order" : "Sale"} & Generate ${isTaxMode ? "TAX INVOICE" : "Receipt"}`}
               </button>
             </div>
           </div>
         </div>
 
-        {/* Invoice success modal — Dual output: Professional PDF (already downloaded) + Thermal + Share */}
+        {/* Success modal — Dual output: Professional PDF (already downloaded) + Thermal + Share */}
         {showInvoice && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl p-6 max-w-md w-full">
-              <h3 className="font-semibold text-lg">TAX INVOICE Generated</h3>
+              <h3 className="font-semibold text-lg">{isTaxMode ? "TAX INVOICE" : "Receipt"} Generated</h3>
               <p className="mt-1 font-mono text-sm">#{lastInvoiceNumber}</p>
-              <p className="text-xs text-gray-500 mt-1">Professional PDF downloaded. Stock updated. Full IRD-compliant record saved.</p>
+              <p className="text-xs text-gray-500 mt-1">Professional PDF downloaded. Stock updated.</p>
 
               <div className="mt-4 grid grid-cols-1 gap-2">
                 <button
@@ -413,7 +418,7 @@ function SaleContent() {
                     if (lastTxnForActions && organization) {
                       generateProfessionalPDF(organization, lastTxnForActions);
                     } else {
-                      toast.error("No invoice data for re-download");
+                      toast.error("No data for re-download");
                     }
                   }}
                   className="w-full py-3 rounded-xl border border-emerald-600 text-emerald-700"
@@ -426,7 +431,7 @@ function SaleContent() {
                     if (lastTxnForActions && organization) {
                       printThermalReceipt(organization, lastTxnForActions);
                     } else {
-                      toast.error("No invoice data for thermal print");
+                      toast.error("No data for thermal print");
                     }
                   }}
                   className="w-full py-3 rounded-xl bg-black text-white"
@@ -453,7 +458,9 @@ function SaleContent() {
               </div>
 
               <p className="mt-3 text-[10px] text-center text-gray-400">
-                Both PDF (detailed, for records/accountant) and Thermal (counter printer) are IRD Gazette compliant.
+                {isTaxMode
+                  ? "PDF and Thermal are formatted for official Tax Invoice use (VAT-registered businesses)."
+                  : "PDF (for records) and Thermal receipt (counter printer)."}
               </p>
             </div>
           </div>

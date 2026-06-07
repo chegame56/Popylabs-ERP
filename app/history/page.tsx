@@ -56,7 +56,7 @@ export default function HistoryPage() {
     return () => unsub();
   }, [organization]);
 
-  // Re-generate using the shared IRD-compliant professional PDF generator (handles legacy txns too)
+  // Re-generate PDF (branching: Tax Invoice or simple Receipt) from stored txn using current org setting
   const regeneratePdf = (txn: Transaction) => {
     if (!organization) {
       toast.error("Organization not loaded");
@@ -85,7 +85,7 @@ export default function HistoryPage() {
     }
     const text = generateWhatsAppText(organization, txn);
     navigator.clipboard.writeText(text).then(() => {
-      toast.success("Invoice text copied — ready for WhatsApp");
+      toast.success("Bill text copied — ready for WhatsApp");
     }).catch(() => {
       alert(text); // fallback
     });
@@ -172,7 +172,7 @@ export default function HistoryPage() {
       {selected && (
         <div className="fixed inset-0 bg-black/40 flex items-end md:items-center justify-center z-50 p-4">
           <div className="bg-white w-full md:w-[460px] rounded-t-2xl md:rounded-2xl p-6">
-            <h3 className="font-semibold text-lg">Invoice {selected.invoiceNumber}</h3>
+            <h3 className="font-semibold text-lg">{(organization?.issuesTaxInvoices ? "Tax Invoice" : "Receipt")} {selected.invoiceNumber}</h3>
             <p className="text-sm text-gray-500 mt-0.5">
               {selected.createdAt?.toDate?.().toLocaleString() || ""} • {selected.paymentMethod}
               {selected.placeOfSupply ? ` • ${selected.placeOfSupply}` : ""}
@@ -200,13 +200,13 @@ export default function HistoryPage() {
                   <span>− LKR {selected.discount}</span>
                 </div>
               )}
-              {typeof selected.taxableValue === "number" && (
+              {(organization?.issuesTaxInvoices && typeof selected.taxableValue === "number") && (
                 <div className="flex justify-between">
                   <span>Taxable Value</span>
                   <span>LKR {selected.taxableValue}</span>
                 </div>
               )}
-              {typeof selected.vatRate === "number" && typeof selected.vatAmount === "number" && (
+              {(organization?.issuesTaxInvoices && typeof selected.vatRate === "number" && typeof selected.vatAmount === "number") && (
                 <div className="flex justify-between">
                   <span>VAT @ {selected.vatRate}%</span>
                   <span>LKR {selected.vatAmount}</span>
@@ -252,7 +252,9 @@ export default function HistoryPage() {
             </div>
 
             <p className="mt-3 text-center text-[10px] text-gray-400">
-              Both outputs are designed to meet Sri Lanka IRD VAT Tax Invoice requirements.
+              {organization?.issuesTaxInvoices
+                ? "PDF and thermal follow Tax Invoice format (for VAT-registered businesses)."
+                : "PDF (records) and thermal receipt."}
             </p>
           </div>
         </div>

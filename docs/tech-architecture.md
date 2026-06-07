@@ -2,7 +2,9 @@
 
 **Status**: Short decision record. Derived directly from [MVP-Spec-v1.md](./MVP-Spec-v1.md).  
 **Date**: June 2026  
-**Goal**: Make pragmatic choices that let us ship a reliable offline-first SaaS fast, while satisfying the non-negotiables (IRD invoices, phone-as-scanner hybrid use, power-cut resilience, multi-device, simple UX).
+**Goal**: Make pragmatic choices that let us ship a reliable offline-first SaaS fast, while satisfying the non-negotiables (phone-as-scanner hybrid use, power-cut resilience, multi-device, simple UX).
+
+> **Direction update (2026):** Per product owner — current implementation produces simple professional **bills** / receipts (VAT breakdown included). It does not claim or implement full IRD "TAX INVOICE" / Gazette 2463/05 format. IRD POS API compliance is future work. Original references below have been revised accordingly.
 
 ---
 
@@ -11,7 +13,7 @@
 - Offline-first is **P0** and a major differentiator. Sales + stock changes must work with zero internet/power and sync cleanly later.
 - Stock correctness is critical (no lost sales or negative ghosts on sync).
 - Hybrid scanner: Phone camera must be able to feed an active desktop sale (realtime preferred, polling acceptable).
-- Every completed transaction **must** produce a correct, professional, printable IRD TAX INVOICE (specific fields + layout + amount in words).
+- Every completed transaction produces a clear professional bill / receipt (VAT breakdown, serial, amount in words, business details). Full IRD-mandatory layout is deferred to upcoming POS API integration.
 - Excellent on both old desktop browsers **and** modern phones. PWA installable.
 - Launch fast (show working software to existing clients in months, not a year). Keep v1 scope narrow.
 - SaaS foundation (multi-tenancy) even if first clients are manually onboarded.
@@ -108,7 +110,7 @@ We are using the **simplest approach that still delivers real hybrid value**.
 - Desktop (or phone) doing the sale subscribes to its own active cart in realtime.
 - On the phone, the **Scanner** screen has a mode "Add to current sale". Successful scans (or manual entry) write directly into the active cart document.
 - Desktop sees items appear live in the cart.
-- On "Complete Sale", the active cart is turned into a permanent `transaction`, stock movements are recorded, the cart doc is marked completed (or deleted), and the IRD TAX INVOICE is generated.
+- On "Complete Sale", the active cart is turned into a permanent `transaction`, stock movements are recorded, the cart doc is marked completed (or deleted), and the bill PDF + receipt are generated.
 - Fallback behavior: If no active cart exists, scanner can still add products to a new sale or show "no active sale — start one on another device".
 
 This is the minimal realtime surface we need. No complex sessions or rooms. One active cart per user in the org at a time is sufficient for v1.
@@ -122,9 +124,9 @@ If this proves too simple in practice, we can evolve it post-launch.
 - Use Firestore security rules + `organizationId` on every document for isolation.
 - Later (post v1): Support multiple organizations per user + staff invitations + basic roles.
 
-### 4.4 Invoice Generation (Compliance)
+### 4.4 Bill / Receipt Generation
 - Generate on the client at sale completion (and on demand for reprints).
-- Use a structured template that hard-codes the required IRD fields in the correct order/layout. This is non-negotiable.
+- Renders professional PDF + narrow thermal HTML + plain text (WhatsApp). Includes VAT summary. (Full Gazette/IRD-mandatory template deferred until POS API work.)
 - Primary output: **PDF file**
   - Download button
   - Print button (opens PDF print dialog)
@@ -135,7 +137,7 @@ If this proves too simple in practice, we can evolve it post-launch.
   - Keep this simple but usable (big text, minimal info, clear totals, tax summary).
 - Also provide quick "Copy text for WhatsApp" as a secondary share path.
 - Amount in words: Small pure TS utility (supports LKR, handles "Rupees Only").
-- We re-render invoices from the stored transaction data on demand (safer, no snapshot bloat). Make the renderer a pure function so it's easy to update when IRD rules change.
+- We re-render bills from the stored transaction data on demand (safer, no snapshot bloat). Make the renderer a pure function so it's easy to update when IRD rules or POS API requirements change.
 - Invoice number generation: Handled at completion time using the organization's configured prefix + sequence logic (see data model).
 
 ### 4.5 Data Model Sketch (v1) + Invoice Numbering (Best Pragmatic Approach)
@@ -197,7 +199,7 @@ We are building with real Firebase from day one (no separate mock-only phase).
 - Products: CRUD + photo upload (Storage) + stock management
 - Active cart + realtime scanner (phone adds to desktop sale)
 - New Sale + New Order flows with cart, discount, payment
-- On complete: Create immutable transaction + stock movements + generate real IRD TAX INVOICE PDF + receipt print view
+- On complete: Create immutable transaction + stock movements + generate professional bill PDF + thermal receipt view
 - Dashboard with today's summary, low stock, recent activity
 - Basic offline support using Firestore persistence + local queue for writes
 
@@ -205,7 +207,7 @@ We are building with real Firebase from day one (no separate mock-only phase).
 - Sales/Orders history + invoice reprint + receipt print
 - Light reports (daily totals, top products, low stock)
 - Settings (full business profile, invoice numbering preview)
-- Strong offline testing: full day of sales + stock changes in airplane mode → reconnect + verify stock + invoices
+- Strong offline testing: full day of sales + stock changes in airplane mode → reconnect + verify stock + bills
 - Error/empty/offline states, big tappable targets, low-tech friendly UX
 - Cross-device testing (desktop + real phone)
 

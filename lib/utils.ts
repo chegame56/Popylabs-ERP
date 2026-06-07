@@ -1,7 +1,7 @@
 import { format } from "date-fns";
 
 /**
- * Robust number to words for Sri Lankan LKR TAX INVOICES.
+ * Robust number to words for Sri Lankan LKR bills/receipts.
  * Supports up to several crores (plenty for retail). Uses "Rupees Only".
  * Handles whole rupees (current model). Extend with cents if you ever store paise.
  */
@@ -76,7 +76,7 @@ export function generateInvoiceNumber(prefix: string = "INV-", sequence: number 
   return `${prefix}${yy}${mm}${seq}`;
 }
 
-/** Compute full IRD-compliant breakdown from cart values + org VAT rate. */
+/** Compute VAT breakdown (taxable + VAT amount) from cart values + org VAT rate. */
 export interface InvoiceTotals {
   subtotal: number;
   discount: number;

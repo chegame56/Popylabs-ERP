@@ -2,7 +2,7 @@
 
 **The simplest SaaS for Sri Lankan SMEs to run sales, stock, and records — on phone or computer.**
 
-No expensive hardware. Works during power cuts. Produces correct IRD TAX INVOICES from day one.
+No expensive hardware. Works during power cuts. Produces professional bills (with VAT breakdown) from day one.
 
 ## Current Status (Production Ready Core)
 
@@ -11,7 +11,7 @@ No expensive hardware. Works during power cuts. Produces correct IRD TAX INVOICE
 - Full real data layer:
   - Products fully persisted per organization (add/edit/delete, realtime stock)
   - Sales & Orders: atomic transactions that safely deduct stock + advance invoice sequence + record immutable transactions
-  - Live TAX INVOICE PDFs using your actual business name, TIN, and correct invoice numbering
+  - Live bill PDFs using your actual business name, TIN, and correct serial numbering
 - Settings: real org profile (name, TIN, prefix, low stock threshold)
 - History: real past transactions with PDF re-download
 - Dashboard: real recent activity + low stock counts
@@ -51,7 +51,7 @@ Register a business → you get a real organization. Everything (products, sales
 - **Atomic sales**: stock deduction + invoice sequence + transaction record happen together or not at all.
 - **Org-scoped security rules**: users can only see and modify their own organization's data.
 - **Offline resilient**: Firestore persistence enabled (works during power cuts; syncs when back online).
-- **Correct IRD-style invoices** generated client-side with real business data + amount in words.
+- **Professional bills** (VAT shown) generated client-side with real business data + amount in words.
 - Deployed on Vercel.
 
 ## Tech Notes

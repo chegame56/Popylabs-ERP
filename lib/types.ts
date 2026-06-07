@@ -1,14 +1,15 @@
 // Shared domain types for Popylabs ERP
-// Aligned with IRD Gazette 2463/05 VAT Tax Invoice requirements + dual PDF/thermal needs.
+// Bill / receipt data model (VAT breakdown + serials included for transparency; full IRD POS API support planned later).
 
 export interface Organization {
   id: string;
   legalName: string;
-  tin?: string;                    // 9 or 12 digit TIN (e.g. 123456789V or 123456789000)
+  tin?: string;                    // 9 or 12 digit TIN (e.g. 123456789V or 123456789000). Only required/used when issuesTaxInvoices = true
   address?: string;                // Place of business / place of supply
   contactPhone?: string;
   logoUrl?: string;                // Public URL (http/https) to small logo. Keep < 100KB recommended.
-  defaultVatRate: number;          // e.g. 18 for current standard rate
+  issuesTaxInvoices: boolean;      // NEW: Controls receipt mode. false = clean Normal Receipt (default). true = full Tax Invoice (VAT-registered only)
+  defaultVatRate?: number;         // e.g. 18. Only used/applied when issuesTaxInvoices = true
   invoicePrefix: string;           // e.g. "INV-" or "TAX-"
   nextInvoiceSequence: number;
   lastSequenceResetMonth?: string; // "2026-06" for future monthly/branch reset support

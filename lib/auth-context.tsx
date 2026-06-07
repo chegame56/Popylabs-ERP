@@ -14,9 +14,10 @@ export interface Organization {
   address?: string;
   contactPhone?: string;
   logoUrl?: string;
+  issuesTaxInvoices: boolean;      // Controls mode: false = Normal Receipt (default), true = full Tax Invoice
   invoicePrefix: string;
   nextInvoiceSequence: number;
-  defaultVatRate: number;
+  defaultVatRate?: number;         // Only applied when issuesTaxInvoices === true
   lowStockThreshold?: number;
   branchCode?: string;
   lastSequenceResetMonth?: string;
@@ -93,6 +94,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         address: "",
         contactPhone: "",
         logoUrl: "",
+        issuesTaxInvoices: false,   // default: clean Normal Receipt mode (no tax/VAT on documents)
         invoicePrefix,
         nextInvoiceSequence: 1,
         defaultVatRate: 18,

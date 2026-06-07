@@ -17,6 +17,7 @@ export default function SettingsPage() {
   const [logoUrl, setLogoUrl] = useState("");
   const [invoicePrefix, setInvoicePrefix] = useState("INV-");
   const [defaultVatRate, setDefaultVatRate] = useState(18);
+  const [issuesTaxInvoices, setIssuesTaxInvoices] = useState(false);
   const [lowStockThreshold, setLowStockThreshold] = useState(10);
   const [saving, setSaving] = useState(false);
 
@@ -30,6 +31,7 @@ export default function SettingsPage() {
       setLogoUrl(organization.logoUrl || "");
       setInvoicePrefix(organization.invoicePrefix || "INV-");
       setDefaultVatRate(organization.defaultVatRate ?? 18);
+      setIssuesTaxInvoices(!!organization.issuesTaxInvoices);
       setLowStockThreshold(organization.lowStockThreshold ?? 10);
     }
   }, [organization]);
@@ -55,6 +57,7 @@ export default function SettingsPage() {
         logoUrl: logoUrl.trim() || "",
         invoicePrefix: invoicePrefix.trim() || "INV-",
         defaultVatRate: Number(defaultVatRate) || 18,
+        issuesTaxInvoices: !!issuesTaxInvoices,
         lowStockThreshold: Number(lowStockThreshold) || 10,
         updatedAt: serverTimestamp(),
       });
@@ -87,7 +90,7 @@ export default function SettingsPage() {
 
       <div className="max-w-lg space-y-8">
         <section>
-          <h2 className="font-medium mb-3">Business Profile (used on TAX INVOICES)</h2>
+          <h2 className="font-medium mb-3">Business Profile (appears on bills &amp; receipts)</h2>
           <div className="space-y-4 bg-white border rounded-2xl p-5">
             <div>
               <label className="text-sm block mb-1">Legal Business Name *</label>
@@ -135,6 +138,24 @@ export default function SettingsPage() {
               />
             </div>
 
+            {/* Tax Invoice mode toggle - controls whether documents are simple receipts or full IRD Tax Invoices */}
+            <div className="pt-2 border-t">
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={issuesTaxInvoices}
+                  onChange={(e) => setIssuesTaxInvoices(e.target.checked)}
+                  className="mt-1 h-4 w-4 accent-black border-gray-300 rounded"
+                />
+                <div>
+                  <span className="text-sm font-medium">Tax Invoice applicable</span>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Turn this on only if your business is registered for VAT with the IRD and must issue official Tax Invoices.
+                  </p>
+                </div>
+              </label>
+            </div>
+
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="text-sm block mb-1">Default VAT Rate (%)</label>
@@ -168,10 +189,10 @@ export default function SettingsPage() {
             </div>
           </div>
           <p className="text-xs mt-2 text-gray-500">
-            These values appear on every generated TAX INVOICE and control stock alerts.
+            These values appear on every generated bill and control stock alerts.
           </p>
           <div className="mt-3 text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded p-2">
-            IRD Compliance: Legal name, TIN, address (place of supply), VAT rate and invoice prefix are used to generate Gazette 2463/05 compliant TAX INVOICES (professional PDF + thermal receipt). Keep these accurate.
+            These details appear on bills. They also prepare your business for the upcoming IRD POS API (full compliance planned when the API is released).
           </div>
         </section>
 

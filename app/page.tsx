@@ -26,7 +26,7 @@ export default function Landing() {
         </div>
 
         <div className="pt-8 text-xs text-gray-400">
-          Built for Sri Lankan SMEs • IRD TAX INVOICE compliant
+          Built for Sri Lankan SMEs • Professional bills with VAT
         </div>
       </div>
     </div>
