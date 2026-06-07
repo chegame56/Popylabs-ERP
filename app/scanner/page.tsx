@@ -3,6 +3,7 @@
 import AppLayout from "@/components/AppLayout";
 import { useEffect, useRef, useState } from "react";
 import { Html5Qrcode } from "html5-qrcode";
+import { toast } from "sonner";
 
 export default function ScannerPage() {
   const [isScanning, setIsScanning] = useState(false);
@@ -28,9 +29,18 @@ export default function ScannerPage() {
         }
       );
       setIsScanning(true);
-    } catch (err) {
-      alert("Camera access failed. Please allow camera permission.");
-      console.error(err);
+    } catch (err: any) {
+      console.error("Camera start failed:", err);
+      const msg = (err?.message || "").toLowerCase();
+      if (msg.includes("permission") || msg.includes("denied") || msg.includes("not allowed")) {
+        toast.error("Camera permission denied. Please allow camera access in your browser settings and try again.");
+      } else if (msg.includes("not found") || msg.includes("no camera")) {
+        toast.error("No camera found on this device.");
+      } else if (window.location.protocol !== "https:" && window.location.hostname !== "localhost") {
+        toast.error("Camera requires HTTPS. Please access over a secure connection.");
+      } else {
+        toast.error("Camera access failed. Please allow camera permission and ensure you're on HTTPS or localhost.");
+      }
     }
   };
 
