@@ -12,11 +12,16 @@ export interface Organization {
   legalName: string;
   tin?: string;
   address?: string;
+  contactPhone?: string;
+  logoUrl?: string;
   invoicePrefix: string;
   nextInvoiceSequence: number;
-  defaultVatRate?: number;
+  defaultVatRate: number;
   lowStockThreshold?: number;
+  branchCode?: string;
+  lastSequenceResetMonth?: string;
   createdAt?: any;
+  ownerUid?: string;
 }
 
 interface AuthContextType {
@@ -86,10 +91,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         legalName: trimmed,
         tin: "",
         address: "",
+        contactPhone: "",
+        logoUrl: "",
         invoicePrefix,
         nextInvoiceSequence: 1,
         defaultVatRate: 18,
         lowStockThreshold: 10,
+        branchCode: "",
         createdAt: serverTimestamp(),
         ownerUid: user.uid,
       });

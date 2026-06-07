@@ -3,8 +3,7 @@
 import AppLayout from "@/components/AppLayout";
 import { useSearchParams } from "next/navigation";
 import { useState, Suspense, useEffect } from "react";
-import jsPDF from "jspdf";
-import { amountInWords, generateInvoiceNumber } from "@/lib/utils";
+import { generateInvoiceNumber, computeInvoiceTotals } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
 import { Product } from "@/lib/types";
 import {
@@ -19,6 +18,7 @@ import {
 } from "firebase/firestore";
 import { db } from "@/lib/firebase";
 import { toast } from "sonner";
+import { generateProfessionalPDF, printThermalReceipt, generateWhatsAppText } from "@/lib/invoice";
 
 interface CartItem {
   id: string;
@@ -36,10 +36,12 @@ function SaleContent() {
   const [productsLoading, setProductsLoading] = useState(true);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [discount, setDiscount] = useState(0);
-  const [paymentMethod, setPaymentMethod] = useState<"Cash" | "Card" | "Transfer">("Cash");
+  const [paymentMethod, setPaymentMethod] = useState<"Cash" | "Card" | "Bank Transfer" | "COD" | "Other">("Cash");
   const [customerName, setCustomerName] = useState("");
+  const [customerPhone, setCustomerPhone] = useState("");
   const [showInvoice, setShowInvoice] = useState(false);
   const [lastInvoiceNumber, setLastInvoiceNumber] = useState("");
+  const [lastTxnForActions, setLastTxnForActions] = useState<any>(null); // snapshot for re-print / copy after close
   const [completing, setCompleting] = useState(false);
 
   // Load real products for this organization (live)
@@ -78,7 +80,9 @@ function SaleContent() {
   }, [organization]);
 
   const subtotal = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
-  const total = Math.max(0, subtotal - discount);
+  const vatRate = organization?.defaultVatRate ?? 18;
+  const totals = computeInvoiceTotals(subtotal, discount, vatRate);
+  const grandTotal = totals.grandTotal;
 
   const addToCart = (product: Product) => {
     setCart((prev) => {
@@ -166,7 +170,9 @@ function SaleContent() {
 
         // Build txnData without any undefined values. Only include customerName (for orders) when it has a real trimmed value.
         // Passing undefined (or a key with undefined) to Transaction.set() throws "Unsupported field value: undefined".
-        const txnData = {
+        const placeOfSupply = organization.address || "Sri Lanka";
+
+        const txnDataForStore = {
           organizationId: organization.id,
           type: mode,
           invoiceNumber,
@@ -176,67 +182,46 @@ function SaleContent() {
             price: c.price,
             qty: c.qty,
           })),
-          subtotal,
-          discount,
-          total,
+          subtotal: totals.subtotal,
+          discount: totals.discount,
+          vatRate: totals.vatRate,
+          vatAmount: totals.vatAmount,
+          taxableValue: totals.taxableValue,
+          grandTotal: totals.grandTotal,
+          total: totals.grandTotal, // legacy alias
           paymentMethod,
           createdAt: serverTimestamp(),
           createdByUid: user.uid,
+          placeOfSupply,
           ...(mode === "order" && trimmedCustomer ? { customerName: trimmedCustomer } : {}),
+          ...(mode === "order" && customerPhone.trim() ? { customerPhone: customerPhone.trim() } : {}),
+          ...(mode === "order" ? { source: "Other" } : {}),
         };
 
-        transaction.set(txnRef, txnData);
+        transaction.set(txnRef, txnDataForStore);
 
         // 5. Advance the invoice sequence on the org
         transaction.update(orgRef, {
           nextInvoiceSequence: currentSeq + 1,
         });
 
-        return { invoiceNumber, txnId: txnRef.id };
+        return { invoiceNumber, txnId: txnRef.id, txnDataForStore };
       });
 
-      // Success — generate the PDF using real data
+      // Success — generate the full IRD-compliant professional PDF
       const invoiceNumber = result.invoiceNumber;
+      const txnSnapshot = {
+        ...result.txnDataForStore,
+        invoiceNumber,
+        createdAt: new Date(), // for immediate render before serverTimestamp resolves
+      };
 
-      const docPdf = new jsPDF();
-      docPdf.setFontSize(16);
-      docPdf.text("TAX INVOICE", 105, 20, { align: "center" });
+      // Use the shared compliant generator (dual output ready)
+      generateProfessionalPDF(organization, txnSnapshot);
 
-      docPdf.setFontSize(11);
-      docPdf.text(organization.legalName || "Your Business", 20, 32);
-      if (organization.tin) docPdf.text(`TIN: ${organization.tin}`, 20, 38);
-      docPdf.text(`Invoice No: ${invoiceNumber}`, 20, 44);
-      docPdf.text(`Date: ${new Date().toLocaleDateString()}`, 20, 50);
-      docPdf.text(`Payment: ${paymentMethod}`, 20, 56);
-
-      if (mode === "order" && trimmedCustomer) {
-        docPdf.text(`Customer: ${trimmedCustomer}`, 20, 62);
-      }
-
-      // Items
-      let y = 72;
-      docPdf.setFontSize(10);
-      cart.forEach((item) => {
-        docPdf.text(`${item.name} x${item.qty}`, 20, y);
-        docPdf.text(`LKR ${(item.price * item.qty).toFixed(0)}`, 160, y, { align: "right" });
-        y += 7;
-      });
-
-      y += 4;
-      docPdf.text(`Subtotal: LKR ${subtotal}`, 160, y, { align: "right" });
-      y += 7;
-      if (discount > 0) docPdf.text(`Discount: LKR ${discount}`, 160, y, { align: "right" });
-      y += 7;
-      docPdf.setFontSize(12);
-      docPdf.text(`TOTAL: LKR ${total}`, 160, y, { align: "right" });
-
-      y += 10;
-      docPdf.setFontSize(10);
-      docPdf.text(amountInWords(total), 20, y);
-
-      docPdf.text("Thank you for your business!", 105, y + 20, { align: "center" });
-
-      docPdf.save(`${invoiceNumber}.pdf`);
+      // Prepare snapshot for post-sale actions (thermal + copy)
+      const actionSnapshot = { ...txnSnapshot, organizationId: organization.id };
+      setLastTxnForActions(actionSnapshot);
 
       setLastInvoiceNumber(invoiceNumber);
       setShowInvoice(true);
@@ -245,6 +230,7 @@ function SaleContent() {
       setCart([]);
       setDiscount(0);
       setCustomerName("");
+      setCustomerPhone("");
 
       toast.success(`Sale recorded • ${invoiceNumber}`);
     } catch (err: any) {
@@ -335,7 +321,7 @@ function SaleContent() {
             <div className="mt-auto pt-4 space-y-3">
               <div className="flex justify-between text-sm">
                 <span>Subtotal</span>
-                <span>LKR {subtotal}</span>
+                <span>LKR {totals.subtotal}</span>
               </div>
 
               <div className="flex items-center gap-2 text-sm">
@@ -348,9 +334,19 @@ function SaleContent() {
                 />
               </div>
 
+              <div className="flex justify-between text-sm">
+                <span>Taxable Value</span>
+                <span>LKR {totals.taxableValue}</span>
+              </div>
+
+              <div className="flex justify-between text-sm">
+                <span>VAT @ {totals.vatRate}%</span>
+                <span>LKR {totals.vatAmount}</span>
+              </div>
+
               <div className="flex justify-between font-semibold text-lg border-t pt-2">
-                <span>Total</span>
-                <span>LKR {total}</span>
+                <span>Total (incl. VAT)</span>
+                <span>LKR {grandTotal}</span>
               </div>
 
               <select
@@ -360,16 +356,26 @@ function SaleContent() {
               >
                 <option value="Cash">Cash</option>
                 <option value="Card">Card</option>
-                <option value="Transfer">Bank Transfer</option>
+                <option value="Bank Transfer">Bank Transfer</option>
+                <option value="COD">COD</option>
+                <option value="Other">Other</option>
               </select>
 
               {mode === "order" && (
-                <input
-                  placeholder="Customer name / phone (optional)"
-                  value={customerName}
-                  onChange={(e) => setCustomerName(e.target.value)}
-                  className="w-full border rounded-xl px-3 py-2"
-                />
+                <>
+                  <input
+                    placeholder="Customer name (optional)"
+                    value={customerName}
+                    onChange={(e) => setCustomerName(e.target.value)}
+                    className="w-full border rounded-xl px-3 py-2"
+                  />
+                  <input
+                    placeholder="Customer phone (optional)"
+                    value={customerPhone}
+                    onChange={(e) => setCustomerPhone(e.target.value)}
+                    className="w-full border rounded-xl px-3 py-2"
+                  />
+                </>
               )}
 
               <button
@@ -383,32 +389,72 @@ function SaleContent() {
           </div>
         </div>
 
-        {/* Invoice success modal */}
+        {/* Invoice success modal — Dual output: Professional PDF (already downloaded) + Thermal + Share */}
         {showInvoice && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl p-6 max-w-md w-full">
               <h3 className="font-semibold text-lg">TAX INVOICE Generated</h3>
-              <p className="mt-1">Invoice #{lastInvoiceNumber} has been downloaded as PDF.</p>
-              <p className="text-xs text-gray-500 mt-1">Stock has been updated in your inventory.</p>
+              <p className="mt-1 font-mono text-sm">#{lastInvoiceNumber}</p>
+              <p className="text-xs text-gray-500 mt-1">Professional PDF downloaded. Stock updated. Full IRD-compliant record saved.</p>
 
-              <div className="mt-4 flex gap-3">
+              <div className="mt-4 grid grid-cols-1 gap-2">
                 <button
                   onClick={() => {
                     setShowInvoice(false);
+                    setLastTxnForActions(null);
                   }}
-                  className="flex-1 py-3 rounded-xl border"
+                  className="w-full py-3 rounded-xl border"
                 >
                   Close
                 </button>
+
                 <button
                   onClick={() => {
-                    alert("Thermal receipt print view would open here (80mm optimized)");
+                    if (lastTxnForActions && organization) {
+                      generateProfessionalPDF(organization, lastTxnForActions);
+                    } else {
+                      toast.error("No invoice data for re-download");
+                    }
                   }}
-                  className="flex-1 py-3 rounded-xl bg-black text-white"
+                  className="w-full py-3 rounded-xl border border-emerald-600 text-emerald-700"
                 >
-                  Print Receipt (Thermal)
+                  Download PDF Again
+                </button>
+
+                <button
+                  onClick={() => {
+                    if (lastTxnForActions && organization) {
+                      printThermalReceipt(organization, lastTxnForActions);
+                    } else {
+                      toast.error("No invoice data for thermal print");
+                    }
+                  }}
+                  className="w-full py-3 rounded-xl bg-black text-white"
+                >
+                  Print Thermal Receipt (80mm)
+                </button>
+
+                <button
+                  onClick={() => {
+                    if (lastTxnForActions && organization) {
+                      const text = generateWhatsAppText(organization, lastTxnForActions);
+                      navigator.clipboard.writeText(text).then(() => {
+                        toast.success("Copied to clipboard — paste into WhatsApp");
+                      }).catch(() => {
+                        // Fallback
+                        alert(text);
+                      });
+                    }
+                  }}
+                  className="w-full py-3 rounded-xl border"
+                >
+                  Copy for WhatsApp / Text
                 </button>
               </div>
+
+              <p className="mt-3 text-[10px] text-center text-gray-400">
+                Both PDF (detailed, for records/accountant) and Thermal (counter printer) are IRD Gazette compliant.
+              </p>
             </div>
           </div>
         )}

@@ -12,7 +12,11 @@ export default function SettingsPage() {
 
   const [legalName, setLegalName] = useState("");
   const [tin, setTin] = useState("");
+  const [address, setAddress] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
+  const [logoUrl, setLogoUrl] = useState("");
   const [invoicePrefix, setInvoicePrefix] = useState("INV-");
+  const [defaultVatRate, setDefaultVatRate] = useState(18);
   const [lowStockThreshold, setLowStockThreshold] = useState(10);
   const [saving, setSaving] = useState(false);
 
@@ -21,7 +25,11 @@ export default function SettingsPage() {
     if (organization) {
       setLegalName(organization.legalName || "");
       setTin(organization.tin || "");
+      setAddress(organization.address || "");
+      setContactPhone(organization.contactPhone || "");
+      setLogoUrl(organization.logoUrl || "");
       setInvoicePrefix(organization.invoicePrefix || "INV-");
+      setDefaultVatRate(organization.defaultVatRate ?? 18);
       setLowStockThreshold(organization.lowStockThreshold ?? 10);
     }
   }, [organization]);
@@ -42,7 +50,11 @@ export default function SettingsPage() {
       await updateDoc(orgRef, {
         legalName: legalName.trim(),
         tin: tin.trim() || "",
+        address: address.trim() || "",
+        contactPhone: contactPhone.trim() || "",
+        logoUrl: logoUrl.trim() || "",
         invoicePrefix: invoicePrefix.trim() || "INV-",
+        defaultVatRate: Number(defaultVatRate) || 18,
         lowStockThreshold: Number(lowStockThreshold) || 10,
         updatedAt: serverTimestamp(),
       });
@@ -96,13 +108,54 @@ export default function SettingsPage() {
               />
             </div>
             <div>
-              <label className="text-sm block mb-1">Invoice Prefix</label>
-              <input
-                value={invoicePrefix}
-                onChange={(e) => setInvoicePrefix(e.target.value)}
-                className="w-full border rounded-xl px-4 py-2.5 font-mono"
+              <label className="text-sm block mb-1">Business Address (Place of Supply)</label>
+              <textarea
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+                className="w-full border rounded-xl px-4 py-2.5 min-h-[64px]"
+                placeholder="No. 123, Main Street, Colombo 07"
               />
             </div>
+            <div>
+              <label className="text-sm block mb-1">Contact Phone</label>
+              <input
+                value={contactPhone}
+                onChange={(e) => setContactPhone(e.target.value)}
+                className="w-full border rounded-xl px-4 py-2.5"
+                placeholder="+94 77 123 4567"
+              />
+            </div>
+            <div>
+              <label className="text-sm block mb-1">Logo URL (public image, optional, small size)</label>
+              <input
+                value={logoUrl}
+                onChange={(e) => setLogoUrl(e.target.value)}
+                className="w-full border rounded-xl px-4 py-2.5"
+                placeholder="https://example.com/logo.png"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="text-sm block mb-1">Default VAT Rate (%)</label>
+                <input
+                  type="number"
+                  value={defaultVatRate}
+                  onChange={(e) => setDefaultVatRate(parseInt(e.target.value) || 18)}
+                  className="w-full border rounded-xl px-4 py-2.5"
+                />
+                <p className="text-xs text-gray-500 mt-1">Currently 18% standard rate in Sri Lanka.</p>
+              </div>
+              <div>
+                <label className="text-sm block mb-1">Invoice Prefix</label>
+                <input
+                  value={invoicePrefix}
+                  onChange={(e) => setInvoicePrefix(e.target.value)}
+                  className="w-full border rounded-xl px-4 py-2.5 font-mono"
+                />
+              </div>
+            </div>
+
             <div>
               <label className="text-sm block mb-1">Low Stock Threshold</label>
               <input
@@ -117,6 +170,9 @@ export default function SettingsPage() {
           <p className="text-xs mt-2 text-gray-500">
             These values appear on every generated TAX INVOICE and control stock alerts.
           </p>
+          <div className="mt-3 text-[10px] text-amber-600 bg-amber-50 border border-amber-200 rounded p-2">
+            IRD Compliance: Legal name, TIN, address (place of supply), VAT rate and invoice prefix are used to generate Gazette 2463/05 compliant TAX INVOICES (professional PDF + thermal receipt). Keep these accurate.
+          </div>
         </section>
 
         <section>

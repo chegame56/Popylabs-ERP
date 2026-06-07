@@ -6,9 +6,8 @@ import { useAuth } from "@/lib/auth-context";
 import { Transaction } from "@/lib/types";
 import { collection, query, where, orderBy, limit, onSnapshot } from "firebase/firestore";
 import { db } from "@/lib/firebase";
-import jsPDF from "jspdf";
-import { amountInWords } from "@/lib/utils";
 import { toast } from "sonner";
+import { generateProfessionalPDF, printThermalReceipt, generateWhatsAppText } from "@/lib/invoice";
 
 export default function HistoryPage() {
   const { organization } = useAuth();
@@ -57,51 +56,39 @@ export default function HistoryPage() {
     return () => unsub();
   }, [organization]);
 
+  // Re-generate using the shared IRD-compliant professional PDF generator (handles legacy txns too)
   const regeneratePdf = (txn: Transaction) => {
+    if (!organization) {
+      toast.error("Organization not loaded");
+      return;
+    }
     try {
-      const doc = new jsPDF();
-      doc.setFontSize(16);
-      doc.text("TAX INVOICE", 105, 20, { align: "center" });
-
-      doc.setFontSize(11);
-      // We don't have full org here, but we have what was recorded at sale time
-      doc.text(organization?.legalName || "Your Business", 20, 32);
-      if (organization?.tin) doc.text(`TIN: ${organization.tin}`, 20, 38);
-      doc.text(`Invoice No: ${txn.invoiceNumber}`, 20, 44);
-      doc.text(`Date: ${txn.createdAt?.toDate ? txn.createdAt.toDate().toLocaleDateString() : new Date().toLocaleDateString()}`, 20, 50);
-      doc.text(`Payment: ${txn.paymentMethod}`, 20, 56);
-
-      if (txn.customerName) {
-        doc.text(`Customer: ${txn.customerName}`, 20, 62);
-      }
-
-      let y = 72;
-      doc.setFontSize(10);
-      txn.items.forEach((item) => {
-        doc.text(`${item.name} x${item.qty}`, 20, y);
-        doc.text(`LKR ${(item.price * item.qty).toFixed(0)}`, 160, y, { align: "right" });
-        y += 7;
-      });
-
-      y += 4;
-      doc.text(`Subtotal: LKR ${txn.subtotal}`, 160, y, { align: "right" });
-      y += 7;
-      if (txn.discount > 0) doc.text(`Discount: LKR ${txn.discount}`, 160, y, { align: "right" });
-      y += 7;
-      doc.setFontSize(12);
-      doc.text(`TOTAL: LKR ${txn.total}`, 160, y, { align: "right" });
-
-      y += 10;
-      doc.setFontSize(10);
-      doc.text(amountInWords(txn.total), 20, y);
-
-      doc.text("Thank you for your business!", 105, y + 20, { align: "center" });
-
-      doc.save(`${txn.invoiceNumber}.pdf`);
-      toast.success("PDF regenerated");
+      generateProfessionalPDF(organization, txn);
+      toast.success("PDF downloaded");
     } catch (e) {
       toast.error("Could not regenerate PDF");
     }
+  };
+
+  const printThermal = (txn: Transaction) => {
+    if (!organization) {
+      toast.error("Organization not loaded");
+      return;
+    }
+    printThermalReceipt(organization, txn);
+  };
+
+  const copyForWhatsApp = (txn: Transaction) => {
+    if (!organization) {
+      toast.error("Organization not loaded");
+      return;
+    }
+    const text = generateWhatsAppText(organization, txn);
+    navigator.clipboard.writeText(text).then(() => {
+      toast.success("Invoice text copied — ready for WhatsApp");
+    }).catch(() => {
+      alert(text); // fallback
+    });
   };
 
   if (!organization) {
@@ -144,16 +131,36 @@ export default function HistoryPage() {
                   </div>
                 </div>
                 <div className="text-right">
-                  <div className="font-medium">LKR {txn.total}</div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      regeneratePdf(txn);
-                    }}
-                    className="text-xs text-blue-600 hover:underline"
-                  >
-                    Download PDF
-                  </button>
+                  <div className="font-medium">LKR {txn.grandTotal ?? txn.total}</div>
+                  <div className="flex gap-2 justify-end mt-0.5">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        regeneratePdf(txn);
+                      }}
+                      className="text-[10px] px-1.5 py-0.5 text-blue-600 hover:underline"
+                    >
+                      PDF
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        printThermal(txn);
+                      }}
+                      className="text-[10px] px-1.5 py-0.5 text-black hover:underline"
+                    >
+                      Thermal
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        copyForWhatsApp(txn);
+                      }}
+                      className="text-[10px] px-1.5 py-0.5 text-gray-600 hover:underline"
+                    >
+                      Copy
+                    </button>
+                  </div>
                 </div>
               </div>
             );
@@ -161,13 +168,14 @@ export default function HistoryPage() {
         </div>
       )}
 
-      {/* Detail modal */}
+      {/* Detail modal — shows full breakdown + all dual actions */}
       {selected && (
         <div className="fixed inset-0 bg-black/40 flex items-end md:items-center justify-center z-50 p-4">
           <div className="bg-white w-full md:w-[460px] rounded-t-2xl md:rounded-2xl p-6">
             <h3 className="font-semibold text-lg">Invoice {selected.invoiceNumber}</h3>
             <p className="text-sm text-gray-500 mt-0.5">
               {selected.createdAt?.toDate?.().toLocaleString() || ""} • {selected.paymentMethod}
+              {selected.placeOfSupply ? ` • ${selected.placeOfSupply}` : ""}
             </p>
 
             <div className="mt-4 border-t pt-3 space-y-1 text-sm">
@@ -192,25 +200,60 @@ export default function HistoryPage() {
                   <span>− LKR {selected.discount}</span>
                 </div>
               )}
+              {typeof selected.taxableValue === "number" && (
+                <div className="flex justify-between">
+                  <span>Taxable Value</span>
+                  <span>LKR {selected.taxableValue}</span>
+                </div>
+              )}
+              {typeof selected.vatRate === "number" && typeof selected.vatAmount === "number" && (
+                <div className="flex justify-between">
+                  <span>VAT @ {selected.vatRate}%</span>
+                  <span>LKR {selected.vatAmount}</span>
+                </div>
+              )}
               <div className="flex justify-between font-semibold text-base pt-1 border-t">
-                <span>Total</span>
-                <span>LKR {selected.total}</span>
+                <span>Total (incl. VAT)</span>
+                <span>LKR {selected.grandTotal ?? selected.total}</span>
               </div>
             </div>
 
-            <div className="mt-6 flex gap-3">
-              <button onClick={() => setSelected(null)} className="flex-1 py-3 rounded-xl border">
+            {(selected.customerName || selected.customerPhone) && (
+              <div className="mt-3 text-xs text-gray-600">
+                {selected.customerName && <div>Customer: {selected.customerName}</div>}
+                {selected.customerPhone && <div>Phone: {selected.customerPhone}</div>}
+              </div>
+            )}
+
+            <div className="mt-6 grid grid-cols-2 gap-2 text-sm">
+              <button onClick={() => setSelected(null)} className="py-3 rounded-xl border col-span-2 md:col-span-1">
                 Close
               </button>
               <button
                 onClick={() => {
                   regeneratePdf(selected);
                 }}
-                className="flex-1 py-3 rounded-xl bg-black text-white"
+                className="py-3 rounded-xl border border-emerald-700 text-emerald-700 md:col-span-1"
               >
-                Download PDF again
+                Download PDF
+              </button>
+              <button
+                onClick={() => printThermal(selected)}
+                className="py-3 rounded-xl bg-black text-white"
+              >
+                Print Thermal (80mm)
+              </button>
+              <button
+                onClick={() => copyForWhatsApp(selected)}
+                className="py-3 rounded-xl border"
+              >
+                Copy WhatsApp Text
               </button>
             </div>
+
+            <p className="mt-3 text-center text-[10px] text-gray-400">
+              Both outputs are designed to meet Sri Lanka IRD VAT Tax Invoice requirements.
+            </p>
           </div>
         </div>
       )}

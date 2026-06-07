@@ -52,7 +52,7 @@ export default function Dashboard() {
         txns.forEach((t) => {
           const ts = t.createdAt?.toDate?.().getTime?.() || 0;
           if (ts >= startOfDay) {
-            total += t.total || 0;
+            total += (t.grandTotal ?? t.total) || 0;
             count += 1;
           }
         });
@@ -164,7 +164,7 @@ export default function Dashboard() {
                   {t.invoiceNumber} • {t.type === "order" ? "Order" : "Sale"}
                   {t.customerName ? ` • ${t.customerName}` : ""}
                 </div>
-                <div className="font-medium">LKR {t.total}</div>
+                <div className="font-medium">LKR {t.grandTotal ?? t.total}</div>
               </div>
             ))}
             {loading && recent.length === 0 && (
